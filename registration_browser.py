@@ -58,13 +58,18 @@ def _run_pre_submit_js(script, *args):
 _OWN_NAMES = {'is_cloudflare_block_response', 'response_preview', 'start_browser', 'enable_nsfw_for_token', 'stop_browser_proxy_bridge', 'set_tos_accepted', 'fill_email_and_submit', 'getTurnstileToken', 'set_birth_date', 'generate_random_birthdate', 'fill_profile_and_submit', 'click_email_signup_button', 'wait_for_sso_cookie', 'fill_code_and_submit', 'build_profile', 'cleanup_runtime_memory', 'open_signup_page', 'stop_browser', 'encode_grpc_nsfw_settings', 'restart_browser', 'has_profile_form', 'update_nsfw_settings', 'refresh_active_page'}
 
 
+_RUNTIME_DEPENDENCIES = (
+    "config", "get_configured_proxy", "get_proxies", "prepare_browser_proxy",
+    "create_browser_options", "page_has_proxy_error", "is_proxy_connection_error",
+    "sleep_with_cancel", "raise_if_cancelled", "AccountRetryNeeded",
+    "get_email_and_token", "get_oai_code", "get_user_agent",
+)
+
+
 def bind_runtime(namespace):
-    for name, value in namespace.items():
-        if name.startswith("__") or name in _OWN_NAMES or name in {
-            "browser", "page", "browser_proxy_bridge", "browser_started_with_proxy", "cf_clearance",
-        }:
-            continue
-        globals()[name] = value
+    for name in _RUNTIME_DEPENDENCIES:
+        if name in namespace:
+            globals()[name] = namespace[name]
 
 
 def generate_random_birthdate():
@@ -421,6 +426,9 @@ def open_signup_page(log_callback=None, cancel_callback=None):
             restart_browser(log_callback=log_callback, use_proxy=False)
             _open_with_current_browser()
         else:
+            from registration_flow import RecoverablePreSubmitError
+            if isinstance(e, (ContextLostError, PageDisconnectedError, TimeoutError)):
+                raise RecoverablePreSubmitError(f"注册页导航暂时失败: {e}") from e
             raise
 
     if browser_started_with_proxy and page_has_proxy_error(page):
@@ -741,6 +749,9 @@ return 'enter';
                 detail = f" ({clicked})" if isinstance(clicked, str) else ""
                 log_callback(f"[*] 已填写邮箱并提交: {email}{detail}")
             return email, dev_token
+        # JS explicitly reported no click/submission, so a later failure is
+        # still safe to restart. An exception during JS remains ambiguous.
+        _mark_registration_stage("page_open")
         sleep_with_cancel(0.5, cancel_callback)
     if last_snapshot:
         inputs = " | ".join(last_snapshot.get("inputs", [])[:6])
