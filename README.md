@@ -89,7 +89,7 @@ Grok Register 是一个面向自动化流程研究、测试环境验证和个人
     </td>
   </tr>
   <tr>
-    <td colspan="2"><sub>广告合作请联系我：2309501984</sub></td>
+    <td colspan="2"><sub>广告合作请联系我：<strong><code>2309501984</code></strong></sub></td>
   </tr>
 </table>
 
