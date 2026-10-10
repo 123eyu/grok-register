@@ -53,27 +53,45 @@ Grok Register 是一个面向自动化流程研究、测试环境验证和个人
 
 ## 赞助商
 
-<div align="center">
-
-<a href="https://www.ipwo.net/?ref=githubgrokregister">
-  <img alt="IPWO住宅代理" src="./assets/ipwo-banner.png" />
-</a>
-
-</div>
-
-<p><sub>需要稳定的住宅 IP？试试 <a href="https://www.ipwo.net/?ref=githubgrokregister">IPWO</a>住宅代理。</sub></p>
-
-<p><sub>
-覆盖 195+ 国家和地区<br>
-真实住宅 IP 资源<br>
-灵活的 IP 轮换<br>
-支持 HTTP / HTTPS / SOCKS5
-</sub></p>
-
-<p><sub>适用于自动化注册、账号管理、数据采集及跨境业务场景，可与浏览器自动化工具和代理池灵活搭配。免费试用，折扣码：<strong><code>0205</code></strong></sub></p>
-
-<p><sub>广告合作请联系我：2309501984</sub></p>
-
+<table width="100%">
+  <tr>
+    <td width="50%" align="center" valign="middle">
+      <a href="https://www.ipwo.net/?ref=githubgrokregister">
+        <img alt="IPWO住宅代理" src="./assets/ipwo-banner.png" width="100%" />
+      </a>
+    </td>
+    <td width="50%" align="center" valign="middle">
+      <a href="https://proxylane.dev/?utm_source=grok_register&amp;utm_medium=partnership&amp;utm_campaign=grok_register_sponsor_202610&amp;utm_content=github_readme">
+        <img alt="ProxyLane住宅代理" src="./assets/proxylane-banner.png" width="100%" />
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <p><sub>需要稳定的住宅 IP？试试 <a href="https://www.ipwo.net/?ref=githubgrokregister">IPWO</a>住宅代理。</sub></p>
+      <p><sub>
+        覆盖 195+ 国家和地区<br>
+        真实住宅 IP 资源<br>
+        灵活的 IP 轮换<br>
+        支持 HTTP / HTTPS / SOCKS5
+      </sub></p>
+      <p><sub>适用于自动化注册、账号管理、数据采集及跨境业务场景，可与浏览器自动化工具和代理池灵活搭配。免费试用，折扣码：<strong><code>0205</code></strong></sub></p>
+    </td>
+    <td valign="top">
+      <p><sub>需要每个账号一个固定住宅IP？试试<a href="https://proxylane.dev/?utm_source=grok_register&amp;utm_medium=partnership&amp;utm_campaign=grok_register_sponsor_202610&amp;utm_content=github_readme">ProxyLane</a>住宅代理。</sub></p>
+      <p><sub>
+        覆盖195个国家，可按城市、ISP、ASN定向<br>
+        95%+ IP获Scamalytics低风险评级<br>
+        支持<strong><code>{account}</code></strong>占位符，每次注册一个固定住宅 IP：<br>
+        <code>http://USER_c_US_s_{account}:PASS@us.gw.proxylane.dev:10000</code><br>
+        中文界面，支持USDT付款，首次购买使用优惠码<strong><code>GROKREG30</code></strong>享7折
+      </sub></p>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2"><sub>广告合作请联系我：2309501984</sub></td>
+  </tr>
+</table>
 ## 项目功能
 
 Grok Register 使用真实 Chromium / Chrome 完成注册流程，并把 GUI、CLI 和 WebUI 都接到同一套注册核心上。
