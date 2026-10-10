@@ -83,7 +83,7 @@ Grok Register 是一个面向自动化流程研究、测试环境验证和个人
         覆盖195个国家，可按城市、ISP、ASN定向<br>
         95%+ IP获Scamalytics低风险评级<br>
         支持<strong><code>{account}</code></strong>占位符，每次注册一个固定住宅 IP：<br>
-        <code>http://<wbr>USER_c_US_s_<wbr>{account}<wbr>:PASS@<wbr>us.gw.<wbr>proxylane.<wbr>dev:10000</code><br>
+        <code>http://&#8203;USER_c_US_s_&#8203;{account}&#8203;:PASS@&#8203;us.gw.&#8203;proxylane.&#8203;dev:10000</code><br>
         中文界面，支持USDT付款，首次购买使用优惠码<strong><code>GROKREG30</code></strong>享7折
       </sub></p>
     </td>
