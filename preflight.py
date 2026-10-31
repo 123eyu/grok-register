@@ -35,10 +35,13 @@ def _safe_error(error, config):
 
 
 def _check_configuration(config):
-    from app_config import validate_config_structure
+    from app_config import DEFAULT_CONFIG, validate_config_structure
 
+    validation_config = dict(config)
+    validation_config["cpa_base_url"] = DEFAULT_CONFIG["cpa_base_url"]
+    validation_config["grok2api_remote_base"] = ""
     try:
-        validate_config_structure(config)
+        validate_config_structure(validation_config)
     except Exception as exc:
         return _result(
             "configuration", "Configuration", "ERROR", True,
@@ -46,7 +49,7 @@ def _check_configuration(config):
         )
     return _result(
         "configuration", "Configuration", "OK", True,
-        "配置结构和当前运行所需字段均通过校验",
+        "配置字段类型、取值范围和枚举校验通过",
     )
 
 
@@ -153,6 +156,9 @@ def _check_cpa_config(config):
 
     try:
         settings = CpaExportSettings.from_config(config)
+        parsed = urllib.parse.urlsplit(settings.base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("CPA Base URL 无效")
         _load_mint_and_export(settings.tools_dir)
     except Exception as exc:
         return _result("cpa", "CPA", "WARN", False,
@@ -180,9 +186,9 @@ def _check_grok2api_config(config):
 
     warnings = []
     if local_enabled:
-        from account_outputs import resolve_grok2api_local_token_file
-
-        path = Path(resolve_grok2api_local_token_file()).expanduser().resolve()
+            configured_path = str(config.get("grok2api_local_token_file") or "").strip()
+        path = Path(configured_path or (Path(__file__).resolve().parent / "token.json"))
+        path = path.expanduser().resolve()
         if path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -198,15 +204,15 @@ def _check_grok2api_config(config):
 
     if remote_enabled:
         base = str(config.get("grok2api_remote_base") or "").strip()
-        if not base:
-            warnings.append("远端 Base URL 未配置")
-        elif not (
-            config.get("grok2api_remote_app_key")
-            or (
-                config.get("grok2api_remote_admin_username")
-                and config.get("grok2api_remote_admin_password")
-            )
-        ):
+        parsed = urllib.parse.urlsplit(base)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            warnings.append("远端 Base URL 无效")
+        has_app_key = bool(config.get("grok2api_remote_app_key"))
+        has_username = bool(config.get("grok2api_remote_admin_username"))
+        has_password = bool(config.get("grok2api_remote_admin_password"))
+        if (has_username != has_password) or (has_app_key and (has_username or has_password)):
+            warnings.append("远端认证配置不完整或互相冲突")
+        elif not (has_app_key or (has_username and has_password)):
             warnings.append("远端认证信息不完整")
 
     if warnings:
