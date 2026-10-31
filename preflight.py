@@ -35,10 +35,10 @@ def _safe_error(error, config):
 
 
 def _check_configuration(config):
-    from app_config import validate_run_requirements
+    from app_config import validate_config_structure
 
     try:
-        validate_run_requirements(config)
+        validate_config_structure(config)
     except Exception as exc:
         return _result(
             "configuration", "Configuration", "ERROR", True,
@@ -341,8 +341,10 @@ def run_health_checks(config, connectivity=False, log_callback=None):
     if connectivity:
         for check in checks:
             if check["status"] == "ERROR" or (
-                check["key"] in {"cpa", "grok2api"}
-                and check["message"].endswith("已关闭")
+                check["key"] == "cpa" and not cfg.get("cpa_export_enabled")
+            ) or (
+                check["key"] == "grok2api"
+                and not cfg.get("grok2api_auto_add_remote")
             ):
                 continue
             if check["key"] not in probes:
