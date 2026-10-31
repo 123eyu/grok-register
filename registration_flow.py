@@ -107,6 +107,7 @@ class RegistrationOperations:
     internal_stage_markers: bool = False
     screen_sso: Optional[Callable[[str, str], Any]] = None
     preflight_mail: Optional[Callable[[], Any]] = None
+    persist_account_record: Optional[Callable[[RegistrationResult], Dict[str, Any]]] = None
 
 
 @dataclass
@@ -130,6 +131,7 @@ class OutputResult:
     save_error: str = ""
     pools: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     cpa: Dict[str, Any] = field(default_factory=dict)
+    legacy_export_error: str = ""
 
 
 @dataclass
@@ -250,9 +252,18 @@ def persist_account_result(result, callbacks, ops):
     screen = getattr(ops, "screen_sso", None)
     if callable(screen):
         screen(result.sso, result.email)
+    legacy_export_error = ""
     try:
-        ops.persist_account_line(result.email, result.password, result.sso)
+        persist_record = getattr(ops, "persist_account_record", None)
+        if callable(persist_record):
+            persistence = persist_record(result)
+            if isinstance(persistence, dict):
+                legacy_export_error = str(persistence.get("legacy_export_error") or "")
+        else:
+            ops.persist_account_line(result.email, result.password, result.sso)
         saved = True; save_error = ""; pending_saved = False
+        if legacy_export_error:
+            callbacks.log("[!] SQLite 已保存账号，但旧版 TXT 兼容导出失败: %s" % legacy_export_error)
     except Exception as exc:
         saved = False; save_error = str(exc)
         try:
@@ -283,7 +294,10 @@ def persist_account_result(result, callbacks, ops):
     except Exception as exc:
         callbacks.log(f"[!] CPA 导出后处理异常，账号结果已保留: {exc}")
         cpa = {"ok": False, "skipped": False, "error": str(exc)}
-    return OutputResult(registered=True, saved=saved, pending_saved=pending_saved, save_error=save_error, pools=pools, cpa=cpa)
+    return OutputResult(
+        registered=True, saved=saved, pending_saved=pending_saved, save_error=save_error,
+        pools=pools, cpa=cpa, legacy_export_error=legacy_export_error,
+    )
 
 
 def _notify_observer(observer, result, account, output, callbacks):
@@ -310,7 +324,10 @@ def _record_success(result, settings, callbacks, ops, account, output, last_clea
     else:
         result.fail_count += 1; result.registered_unsaved_count += 1; callbacks.log(f"[-] 注册成功但持久化未完成: {account.email}")
     pool_warning = any(isinstance(state, dict) and state.get("enabled") and not state.get("ok") for state in output.pools.values())
-    cpa_warning = bool(output.cpa and not output.cpa.get("skipped") and (not output.cpa.get("ok") or output.cpa.get("warning") or output.cpa.get("cpa_copy_error")))
+    cpa_warning = bool(
+        output.cpa and not output.cpa.get("skipped")
+        and (not output.cpa.get("ok") or output.cpa.get("warning") or output.cpa.get("cpa_copy_error"))
+    ) or bool(output.legacy_export_error)
     if pool_warning or cpa_warning: result.postprocess_warning_count += 1
     return last_cleanup_success_count
 
