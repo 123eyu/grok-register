@@ -560,6 +560,23 @@ def registration_history(
     )
 
 
+@app.get("/api/jobs/history/{run_id}/attempts")
+def registration_attempt_history(
+    run_id: int,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    _require_local_origin(request)
+    result = _get_database().list_registration_attempts(run_id, limit, offset)
+    if result is None:
+        raise HTTPException(status_code=404, detail="注册批次不存在")
+    return JSONResponse(
+        content={"ok": True, **result, "limit": limit, "offset": offset},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.post("/api/start")
 def start(request: Request):
     _require_local_origin(request)
