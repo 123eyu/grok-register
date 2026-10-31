@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from storage.database import Database
-from storage.legacy_import import import_legacy_accounts, import_legacy_pending
+from storage.legacy_import import import_legacy_accounts, import_legacy_pending, import_legacy_directory
 
 
 class LegacyImportTests(unittest.TestCase):
@@ -105,6 +105,28 @@ class LegacyImportTests(unittest.TestCase):
         self.assertEqual(summary.duplicates, 1)
         self.assertEqual(self.database.account_count(), 1)
 
+
+    def test_directory_imports_only_changed_files_and_keeps_unknown_provider(self):
+        path = Path(self.temp_dir.name) / "accounts-old.txt"
+        path.write_text("first@example.com----pw1----token1\n", encoding="utf-8")
+
+        first = import_legacy_directory(self.database, self.temp_dir.name)
+        second = import_legacy_directory(self.database, self.temp_dir.name)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0][1].imported, 1)
+        self.assertEqual(second, [])
+        with self.database.connection() as connection:
+            row = connection.execute("SELECT * FROM accounts").fetchone()
+        self.assertEqual(row["email_provider"], "")
+        self.assertEqual(row["source"], "legacy_txt")
+
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("second@example.com----pw2----token2\n")
+        third = import_legacy_directory(self.database, self.temp_dir.name)
+        self.assertEqual(len(third), 1)
+        self.assertEqual(third[0][1].imported, 1)
+        self.assertEqual(self.database.account_count(), 2)
 
 if __name__ == "__main__":
     unittest.main()
