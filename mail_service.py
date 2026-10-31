@@ -926,29 +926,55 @@ def duckmail_get_oai_code(
         sleep_with_cancel(poll_interval, cancel_callback)
     raise VerificationCodeUnavailable(f"在 {timeout}s 内未收到验证码邮件")
 
+_CODE_TOKEN = r"(?:[A-Z0-9]{3}-[A-Z0-9]{3}|(?=[A-Z0-9]{0,7}\d)[A-Z0-9]{4,8})"
+_CODE_TOKEN_BOUNDARY = r"(?<![A-Z0-9])(" + _CODE_TOKEN + r")(?![A-Z0-9])"
+
+
+def _matching_codes(patterns, text):
+    return {
+        match.group(1).upper()
+        for pattern in patterns
+        for match in re.finditer(pattern, text, re.IGNORECASE)
+    }
+
+
 def extract_verification_code(text, subject=""):
-    if subject:
-        subject_patterns = [
-            r"^([A-Z0-9]{3}-[A-Z0-9]{3})\s+xAI\b",
-            r"\b(?:confirmation|verification)\s+code\s*:\s*([A-Z0-9]{3}-[A-Z0-9]{3})\b",
-        ]
-        for pattern in subject_patterns:
-            match = re.search(pattern, subject, re.IGNORECASE)
-            if match:
-                return match.group(1)
-    match = re.search(r"\b([A-Z0-9]{3}-[A-Z0-9]{3})\b", text, re.IGNORECASE)
-    if match:
-        return match.group(1)
-    patterns = [
-        r"verification\s+code[:\s]+(\d{4,8})",
-        r"your\s+code[:\s]+(\d{4,8})",
-        r"confirm(?:ation)?\s+code[:\s]+(\d{4,8})",
+    """Extract xAI verification codes by subject, explicit context, then safe fallback."""
+    subject = _decode_header_value(subject)
+    text = str(text or "")
+
+    subject_patterns = [
+        r"^\s*([A-Z0-9]{3}-[A-Z0-9]{3})(?![A-Z0-9])\s+xAI\b",
+        r"\b(?:confirmation|verification|security|one[-\s]?time)\s+"
+        r"(?:code|pin|passcode)\s*(?:is\s+|[:：]\s*|\s+)"
+        + _CODE_TOKEN_BOUNDARY,
     ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    return None
+    subject_codes = _matching_codes(subject_patterns, subject)
+    if len(subject_codes) == 1:
+        return next(iter(subject_codes))
+
+    context_patterns = [
+        r"\b(?:confirmation|verification|security|one[-\s]?time)\s*"
+        r"(?:code|pin|passcode)\s*(?:is\s+|[:：]\s*|\s+)"
+        + _CODE_TOKEN_BOUNDARY,
+        r"\b(?:your\s+code|code|pin|passcode)\s*(?:is\s+|[:：]\s*)"
+        + _CODE_TOKEN_BOUNDARY,
+        r"(?:验证码|确认码|校验码|一次性密码)\s*(?:是|为|[:：])?\s*"
+        + _CODE_TOKEN_BOUNDARY,
+        _CODE_TOKEN_BOUNDARY
+        + r"[\s\S]{0,80}?(?:is\s+your\s+(?:confirmation|verification|security)?\s*"
+        r"(?:code|pin|passcode)|(?:confirmation|verification)\s*code|作为您的验证码)",
+    ]
+    contextual_codes = _matching_codes(context_patterns, text)
+    if len(contextual_codes) == 1:
+        return next(iter(contextual_codes))
+    if contextual_codes:
+        return None
+
+    # The legacy xAI format uses a single XXX-XXX token without body context.
+    # Do not guess when a message contains multiple different candidates.
+    candidates = _matching_codes([r"(?<![A-Z0-9])([A-Z0-9]{3}-[A-Z0-9]{3})(?![A-Z0-9])"], text)
+    return next(iter(candidates)) if len(candidates) == 1 else None
 
 def generate_username(length=10):
     chars = string.ascii_lowercase + string.digits
