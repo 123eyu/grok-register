@@ -1448,7 +1448,10 @@ class GrokRegisterGUI:
             "cloudmail_api_base": self.cloudmail_api_base_var.get().strip(),
             "cloudmail_public_token": self.cloudmail_public_token_var.get().strip(),
             "cloudmail_domains": self.cloudmail_domains_var.get().strip(),
-            "outlook_accounts_file": self.outlook_accounts_file_var.get().strip(),
+            "outlook_accounts_file": (
+                self.outlook_accounts_file_var.get().strip()
+                or "./output/mailboxes/outlook-accounts.txt"
+            ),
             "proxy": self.proxy_var.get().strip(),
             "proxy_mode": self.proxy_mode_var.get().strip() or "auto",
             "proxy_fallback": self.proxy_fallback_var.get().strip() or "none",
