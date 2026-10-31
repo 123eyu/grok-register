@@ -44,6 +44,34 @@ class AccountServiceTests(unittest.TestCase):
         self.assertEqual(stored["artifacts"][0]["artifact_type"], "legacy_txt")
         self.assertEqual(stored["artifacts"][0]["path"], str(self.output_path.resolve()))
 
+    def test_existing_legacy_export_is_updated_when_password_changes(self):
+        account = SimpleNamespace(
+            email="user@example.com",
+            password="old-password",
+            sso="same-sso",
+            profile={},
+        )
+        first = persist_account(self.database, self.output_path, account, "duckmail", self.run_id)
+        updated_account = SimpleNamespace(
+            email="user@example.com",
+            password="new-password",
+            sso="same-sso",
+            profile={},
+        )
+        second = persist_account(
+            self.database, self.output_path, updated_account, "duckmail", self.run_id
+        )
+
+        self.assertEqual(first["account_id"], second["account_id"])
+        self.assertFalse(second["inserted"])
+        self.assertEqual(
+            self.output_path.read_text(encoding="utf-8"),
+            "user@example.com----new-password----same-sso\n",
+        )
+        self.assertEqual(
+            self.database.get_account(first["account_id"])["password"], "new-password"
+        )
+
     def test_integration_statuses_are_saved_without_credentials_in_errors(self):
         account = SimpleNamespace(
             email="user@example.com",
