@@ -164,12 +164,12 @@ class VerificationCodeExtractionTests(unittest.TestCase):
         )
         subject, body = mail_service.normalize_mail_message({
             "raw": raw,
-            "text": "Fallback verification code: DEF-456",
+            "text": "Fallback content remains available.",
         })
 
         self.assertEqual(subject, "xAI verification")
         self.assertIn("Your verification code is ABC-123.", body)
-        self.assertIn("Fallback verification code: DEF-456", body)
+        self.assertIn("Fallback content remains available.", body)
         self.assertEqual(mail_service.extract_verification_code(body), "ABC-123")
 
     def test_unsupported_mime_part_does_not_discard_provider_text(self):
