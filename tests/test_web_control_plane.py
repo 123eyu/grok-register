@@ -332,6 +332,12 @@ class WebControlPlaneTests(unittest.TestCase):
             run_id, slot_index=1, attempt_number=1, worker_key="worker-1",
             stage="postprocess", status="succeeded", account_id=second,
         )
+        database.create_registration_attempt(
+            run_id, slot_index=2, attempt_number=1, worker_key="worker-2",
+            stage="browser_start", status="failed", error_type="TimeoutError",
+            error_message="browser start timed out", traceback="Traceback: timeout",
+            failure_type="browser", screenshot_path="/private/failure.png",
+        )
         database.update_registration_run(
             run_id, status="completed", processed_count=2, success_count=1, failed_count=1,
         )
@@ -346,6 +352,8 @@ class WebControlPlaneTests(unittest.TestCase):
             invalid_export = self.client.post("/api/accounts/export", json={"ids": [1.5]})
             stats = self.client.get("/api/stats")
             history = self.client.get("/api/jobs/history")
+            attempts = self.client.get("/api/jobs/history/%s/attempts" % run_id)
+            missing_attempts = self.client.get("/api/jobs/history/999/attempts")
 
         self.assertEqual(listed.status_code, 200)
         payload = listed.json()
@@ -364,8 +372,16 @@ class WebControlPlaneTests(unittest.TestCase):
         self.assertEqual(stats.json()["success_rate"], 50.0)
         self.assertEqual(stats.json()["by_grok2api_remote_status"], {"failed": 1, "unknown": 1})
         self.assertEqual(history.status_code, 200)
-        self.assertEqual(history.json()["items"][0]["attempt_count"], 1)
+        self.assertEqual(history.json()["items"][0]["attempt_count"], 2)
         self.assertEqual(history.json()["items"][0]["success_rate"], 50.0)
+        self.assertEqual(attempts.status_code, 200)
+        self.assertEqual(attempts.headers["cache-control"], "no-store")
+        self.assertEqual(attempts.json()["total"], 2)
+        diagnostic = next(item for item in attempts.json()["items"] if item["failure_type"])
+        self.assertEqual(diagnostic["failure_type"], "browser")
+        self.assertEqual(diagnostic["screenshot_path"], "/private/failure.png")
+        self.assertIn("Traceback", diagnostic["traceback"])
+        self.assertEqual(missing_attempts.status_code, 404)
         self.assertNotEqual(first, second)
 
     def test_account_api_delete_single_and_bulk(self):
