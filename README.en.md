@@ -292,6 +292,12 @@ Static checks inspect local configuration, installed dependencies, and local fil
 
 See [Dependency health checks](docs/health-check.en.md) for details.
 
+### Existing-account reauthentication
+
+Stored accounts can be reauthenticated through normal email/password sign-in, refresh their SSO session, synchronize legacy TXT files, and update CPA/Grok2API authorization exports independently. The local API provides job start, stop and persisted history. The full account management interface will be added in the React phase.
+
+See [Reauthentication and authorization recovery](docs/reauthentication.en.md).
+
 ## Configuration
 
 The project performs structural validation at startup and checks fields required by currently enabled features only when a task actually starts. This allows you to open the GUI / WebUI first and configure the project incrementally.
