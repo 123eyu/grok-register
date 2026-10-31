@@ -178,10 +178,9 @@ def _check_mailbox_config(config):
 
 def _directory_writable(path):
     target = Path(path).expanduser()
-    if target.exists():
-        return target.is_dir() and os.access(str(target), os.W_OK)
-    parent = target.parent
-    return parent.is_dir() and os.access(str(parent), os.W_OK)
+    while not target.exists() and target != target.parent:
+        target = target.parent
+    return target.is_dir() and os.access(str(target), os.W_OK)
 
 
 def _check_cpa_config(config):
@@ -244,7 +243,7 @@ def _check_grok2api_config(config):
                     raise ValueError("目标 token 池必须是 JSON array")
             except Exception as exc:
                 warnings.append("本地 token 文件不可用: " + _safe_error(exc, config))
-        elif not os.access(str(path.parent), os.W_OK):
+        if not _directory_writable(path.parent):
             warnings.append("本地 token 文件所在目录不可写")
 
     if remote_enabled:
