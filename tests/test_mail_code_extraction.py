@@ -28,6 +28,12 @@ class VerificationCodeExtractionTests(unittest.TestCase):
             ),
             "ABC-123",
         )
+        self.assertEqual(
+            mail_service.extract_verification_code(
+                "Your verification code is DEF-456", "Confirmation code: ABC-123"
+            ),
+            "ABC-123",
+        )
 
     def test_explicit_body_context_has_priority_over_other_candidates(self):
         self.assertEqual(
@@ -91,12 +97,12 @@ class VerificationCodeExtractionTests(unittest.TestCase):
 
     def test_encoded_rfc2047_subject_is_decoded(self):
         message = EmailMessage()
-        message["Subject"] = Header("Confirmation code: DEF-456", "utf-8").encode()
+        message["Subject"] = Header("验证码 Confirmation code: DEF-456", "utf-8").encode()
         message.set_content("Your xAI account is ready.")
 
         subject, body = mail_service.normalize_mail_message({"raw": message.as_bytes()})
 
-        self.assertEqual(subject, "Confirmation code: DEF-456")
+        self.assertEqual(subject, "验证码 Confirmation code: DEF-456")
         self.assertEqual(mail_service.extract_verification_code(body, subject), "DEF-456")
 
     def test_base64_transfer_encoding_is_decoded(self):
