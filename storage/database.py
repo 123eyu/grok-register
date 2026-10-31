@@ -110,6 +110,7 @@ _MIGRATIONS = {
         "ALTER TABLE accounts ADD COLUMN grok2api_local_error TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE accounts ADD COLUMN grok2api_remote_status TEXT NOT NULL DEFAULT 'not_requested'",
         "ALTER TABLE accounts ADD COLUMN grok2api_remote_error TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE registration_attempts ADD COLUMN slot_index INTEGER NOT NULL DEFAULT 0",
         "CREATE INDEX idx_accounts_cpa_status ON accounts(cpa_status)",
         "CREATE INDEX idx_accounts_grok2api_local_status ON accounts(grok2api_local_status)",
         "CREATE INDEX idx_accounts_grok2api_remote_status ON accounts(grok2api_remote_status)",
@@ -333,18 +334,18 @@ class Database:
             return cursor.rowcount == 1
 
     def create_registration_attempt(
-        self, registration_run_id, attempt_number, worker_key, stage, status,
+        self, registration_run_id, slot_index, attempt_number, worker_key, stage, status,
         account_id=None, error_type="", error_message="", started_at=None,
         finished_at=None,
     ):
         with self.transaction() as connection:
             cursor = connection.execute(
                 """INSERT INTO registration_attempts (
-                    registration_run_id, account_id, attempt_number, worker_key,
+                    registration_run_id, slot_index, account_id, attempt_number, worker_key,
                     stage, status, error_type, error_message, started_at, finished_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    int(registration_run_id), account_id, int(attempt_number),
+                    int(registration_run_id), int(slot_index), account_id, int(attempt_number),
                     str(worker_key or ""), str(stage or ""), str(status),
                     str(error_type or ""), str(error_message or "")[:500],
                     str(started_at or utc_now()), str(finished_at or utc_now()),
@@ -450,7 +451,7 @@ class Database:
             account["profile"] = json.loads(account.pop("profile_json"))
             account["attempts"] = [
                 dict(item) for item in connection.execute(
-                    """SELECT id, registration_run_id, attempt_number, worker_key,
+                    """SELECT id, registration_run_id, slot_index, attempt_number, worker_key,
                               stage, status, error_type, error_message, started_at, finished_at
                        FROM registration_attempts WHERE account_id = ? ORDER BY id DESC""",
                     (int(account_id),),
