@@ -41,6 +41,7 @@ def ensure_account_line(path, email, password, sso):
         with open(path, "r", encoding="utf-8", newline="") as handle:
             lines = handle.readlines()
 
+        found = False
         updated = False
         for index, line in enumerate(lines):
             parts = line.rstrip("\r\n").split("----", 2)
@@ -48,15 +49,18 @@ def ensure_account_line(path, email, password, sso):
                 continue
             if (parts[0].strip().casefold(), parts[2].strip()) != key:
                 continue
+            found = True
             if parts[1] == str(password):
-                return False
+                continue
             newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
             lines[index] = "%s----%s----%s%s" % (email, password, sso, newline)
             updated = True
 
-        if not updated:
+        if not found:
             _append_account_line_unlocked(path, email, password, sso)
             return True
+        if not updated:
+            return False
 
         fd, temporary_path = tempfile.mkstemp(
             prefix=".accounts-", suffix=".tmp", dir=os.path.dirname(path) or "."
