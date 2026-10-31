@@ -209,7 +209,20 @@ class Database:
             (email, sso),
         ).fetchone()
         if existing is not None:
-            if registration_status == "registered" and existing["registration_status"] == "pending_recovery":
+            if source == "native":
+                connection.execute(
+                    """UPDATE accounts SET
+                        password = ?, email_provider = ?, registration_status = ?,
+                        source = 'native', profile_json = ?, registration_run_id = ?,
+                        updated_at = ?
+                    WHERE id = ?""",
+                    (
+                        str(record.get("password") or ""), str(record.get("email_provider") or ""),
+                        registration_status, _json_text(profile),
+                        record.get("registration_run_id"), updated_at, existing["id"],
+                    ),
+                )
+            elif registration_status == "registered" and existing["registration_status"] == "pending_recovery":
                 connection.execute(
                     """UPDATE accounts
                        SET registration_status = 'registered', source = ?, updated_at = ?
