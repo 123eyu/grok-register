@@ -65,7 +65,12 @@ class ReauthManager:
                 name="grok-register-reauthentication", daemon=True,
             )
             self._thread = thread
-            thread.start()
+            try:
+                thread.start()
+            except Exception:
+                self.database.finish_job(job_id, "failed", error_message="ThreadStartError")
+                self._thread = None
+                raise
             return job_id
 
     def status(self):
