@@ -213,6 +213,57 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         self.assertNotIn("proxy-secret", message)
         self.assertNotIn("remote-secret", message)
 
+    def test_cloudflare_auth_mode_requires_its_api_key(self):
+        result = preflight.run_health_checks(self.config(
+            email_provider="cloudflare",
+            cloudflare_api_base="https://mail.example",
+            cloudflare_auth_mode="bearer",
+            cloudflare_api_key="",
+            cpa_export_enabled=False,
+        ))
+        mailbox = self.by_key(result)["mailbox"]
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(mailbox["status"], "ERROR")
+        self.assertTrue(mailbox["required"])
+        self.assertIn("cloudflare_api_key", mailbox["message"])
+
+    def test_cloudflare_without_auth_does_not_require_an_api_key(self):
+        result = preflight.run_health_checks(self.config(
+            email_provider="cloudflare",
+            cloudflare_api_base="https://mail.example",
+            cloudflare_auth_mode="none",
+            cloudflare_api_key="",
+            cpa_export_enabled=False,
+        ))
+        self.assertEqual(self.by_key(result)["mailbox"]["status"], "OK")
+
+    def test_malformed_urls_return_structured_results_instead_of_raising(self):
+        proxy = preflight.run_health_checks(self.config(
+            proxy_mode="pool",
+            proxy_pool_subscription_url="http://[",
+            cpa_export_enabled=False,
+        ))
+        self.assertEqual(self.by_key(proxy)["proxy"]["status"], "ERROR")
+        self.assertTrue(self.by_key(proxy)["proxy"]["required"])
+
+        grok2api = preflight.run_health_checks(self.config(
+            cpa_export_enabled=False,
+            grok2api_auto_add_remote=True,
+            grok2api_remote_base="http://[",
+            grok2api_remote_app_key="app-key",
+        ))
+        self.assertTrue(grok2api["ready"])
+        self.assertEqual(self.by_key(grok2api)["grok2api"]["status"], "WARN")
+
+        cloudflare = preflight.run_health_checks(self.config(
+            email_provider="cloudflare",
+            cloudflare_api_base="http://[",
+            cpa_export_enabled=False,
+        ))
+        self.assertFalse(cloudflare["ready"])
+        self.assertEqual(self.by_key(cloudflare)["mailbox"]["status"], "ERROR")
+
     def test_summary_counts_only_required_errors_as_blocking(self):
         result = preflight.run_health_checks(self.config(cpa_export_enabled=False))
         self.assertTrue(result["ok"])
