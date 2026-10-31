@@ -931,7 +931,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                     registration_run_id,
                     status="failed",
                     finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    error_message=str(exc),
+                    error_message=type(exc).__name__,
                 )
             except Exception as persist_exc:
                 log_callback("[!] 注册任务异常状态写入 SQLite 失败: %s" % persist_exc)
