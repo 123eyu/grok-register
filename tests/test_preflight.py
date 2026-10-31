@@ -92,6 +92,43 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         manager.reload_sources.assert_called_once_with(force=True)
         manager.probe_all.assert_called_once_with(force=True)
 
+    def test_browser_probe_always_stops_browser_after_start_failure(self):
+        with patch("registration_browser.start_browser", side_effect=RuntimeError("launch failed")), \
+             patch("registration_browser.stop_browser") as stop:
+            with self.assertRaisesRegex(RuntimeError, "launch failed"):
+                preflight._check_browser_connection()
+        stop.assert_called_once_with()
+
+    def test_required_mailbox_connectivity_failure_blocks_readiness(self):
+        with patch.object(preflight, "_check_browser_connection", return_value="browser ok"), \
+             patch.object(preflight, "_check_proxy_connection", return_value="network ok"), \
+             patch.object(preflight, "_check_mailbox_connection", side_effect=RuntimeError("mail offline")):
+            result = preflight.run_health_checks(
+                self.config(cpa_export_enabled=False), connectivity=True
+            )
+
+        self.assertFalse(result["ready"])
+        mailbox = self.by_key(result)["mailbox"]
+        self.assertEqual(mailbox["status"], "ERROR")
+        self.assertTrue(mailbox["connection_tested"])
+
+    def test_optional_cpa_connectivity_failure_remains_a_warning(self):
+        with patch.object(preflight, "_check_cpa_config", return_value=preflight._result(
+            "cpa", "CPA", "OK", False, "CPA config ok"
+        )), patch.object(preflight, "_check_browser_connection", return_value="browser ok"), \
+             patch.object(preflight, "_check_proxy_connection", return_value="network ok"), \
+             patch.object(preflight, "_check_mailbox_connection", return_value="mail ok"), \
+             patch.object(preflight, "_check_cpa_connection", side_effect=RuntimeError("CPA offline")):
+            result = preflight.run_health_checks(
+                self.config(cpa_export_enabled=True), connectivity=True
+            )
+
+        self.assertTrue(result["ready"])
+        cpa = self.by_key(result)["cpa"]
+        self.assertEqual(cpa["status"], "WARN")
+        self.assertFalse(cpa["required"])
+        self.assertTrue(cpa["connection_tested"])
+
     def test_optional_remote_services_are_not_probed_when_disabled(self):
         with patch.object(preflight, "_check_cpa_connection", side_effect=AssertionError), \
              patch.object(preflight, "_check_grok2api_connection", side_effect=AssertionError), \
