@@ -150,6 +150,9 @@ class OptionalMultithreadTests(unittest.TestCase):
                 return module
 
         persisted = []
+        persisted_statuses = []
+        attempts = []
+        next_account_id = {"value": 0}
         persist_lock = threading.Lock()
         runtime_namespace = {
             "_save_mail_credential": lambda _email, _token, _log=None: True,
@@ -169,7 +172,11 @@ class OptionalMultithreadTests(unittest.TestCase):
             "_screen_registered_sso": lambda *_args, **_kwargs: None,
         }
         observed = []
-        callbacks = RegistrationCallbacks(log=lambda _message: None, cancelled=lambda: False)
+        callbacks = RegistrationCallbacks(
+            log=lambda _message: None,
+            cancelled=lambda: False,
+            record_attempt=attempts.append,
+        )
 
         with patch("registration_parallel.load_isolated_module", side_effect=fake_loader), patch(
             "cpa_xai.browser_confirm.shutdown_mint_browsers", return_value=None
@@ -183,6 +190,16 @@ class OptionalMultithreadTests(unittest.TestCase):
                 workers=2,
                 enable_nsfw=False,
                 cleanup_interval=0,
+                persist_account_record=lambda account: (
+                    persist_lock.acquire(),
+                    next_account_id.update(value=next_account_id["value"] + 1),
+                    persisted.append(account.email),
+                    {"account_id": next_account_id["value"], "legacy_export_error": ""},
+                    persist_lock.release(),
+                )[3],
+                persist_account_status=lambda account_id, pools, cpa, password, sso: (
+                    persisted_statuses.append(account_id)
+                ),
             )
 
         self.assertEqual(result.processed_count, 5)
@@ -190,6 +207,10 @@ class OptionalMultithreadTests(unittest.TestCase):
         self.assertEqual(result.fail_count, 0)
         self.assertEqual(len(persisted), 5)
         self.assertEqual(len(set(persisted)), 5)
+        self.assertEqual(len(persisted_statuses), 5)
+        self.assertEqual(len(attempts), 5)
+        self.assertTrue(all(item["status"] == "succeeded" for item in attempts))
+        self.assertEqual({item["account_id"] for item in attempts}, set(persisted_statuses))
         self.assertEqual(len(browser_modules), 2)
         self.assertTrue(all(module.browser is None and module.page is None for module in browser_modules))
         self.assertTrue(observed)
