@@ -43,7 +43,10 @@ def capture_failure_screenshot(
         path = directory / name
         screenshot(path=str(path), full_page=True)
 
-        if not path.is_file() or path.stat().st_size == 0:
+        if not path.is_file():
+            return ""
+        if path.stat().st_size == 0:
+            path.unlink()
             return ""
         if os.name == "posix":
             os.chmod(path, 0o600)
