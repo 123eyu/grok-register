@@ -7,7 +7,7 @@ The storage package uses Python's built-in `sqlite3` module. It enables foreign 
 ## Schema
 
 - `accounts`: account credentials, registration and authorization state, independent CPA and Grok2API local/remote outcomes, source, profile data, and timestamps.
-- `registration_runs`: batch-level counters, cancellation/error state, and a non-secret configuration snapshot.
+- `registration_runs`: batch-level counters (including registered-but-unsaved accounts), cancellation/error state, and a non-secret configuration snapshot.
 - `registration_attempts`: one record for each serial or parallel worker attempt, including batch slot, retry number, worker, stage, outcome, and redacted error details.
 - `account_artifacts`: paths to related files such as legacy account exports.
 - `legacy_imports`: source file fingerprints used to avoid rescanning unchanged legacy files.
