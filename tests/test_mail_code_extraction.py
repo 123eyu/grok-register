@@ -200,16 +200,15 @@ class VerificationCodeExtractionTests(unittest.TestCase):
         self.assertEqual(mail_service.extract_verification_code(body), "ABC-123")
 
     def test_unsupported_mime_part_does_not_discard_provider_text(self):
-        raw = (
-            b"Subject: xAI verification\r\n"
-            b"Content-Type: application/octet-stream\r\n"
-            b"Content-Transfer-Encoding: base64\r\n\r\n"
-            b"AAECAwQ="
+        message = EmailMessage()
+        message.set_content("Your verification code is ABC-123.")
+        message.add_attachment(
+            b"\x00\x01",
+            maintype="application",
+            subtype="octet-stream",
         )
-        body = mail_service.normalize_mail_body({
-            "raw": raw,
-            "text": "Your verification code is ABC-123.",
-        })
+
+        body = mail_service.normalize_mail_body({"raw": message.as_bytes()})
         self.assertIn("Your verification code is ABC-123.", body)
         self.assertEqual(mail_service.extract_verification_code(body), "ABC-123")
 
