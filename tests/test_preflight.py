@@ -213,6 +213,19 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         self.assertNotIn("proxy-secret", message)
         self.assertNotIn("remote-secret", message)
 
+    def test_unknown_proxy_mode_and_mailbox_provider_are_errors(self):
+        proxy = preflight.run_health_checks(self.config(
+            proxy_mode="unknown",
+            cpa_export_enabled=False,
+        ))
+        self.assertEqual(self.by_key(proxy)["proxy"]["status"], "ERROR")
+
+        mailbox = preflight.run_health_checks(self.config(
+            email_provider="unknown",
+            cpa_export_enabled=False,
+        ))
+        self.assertEqual(self.by_key(mailbox)["mailbox"]["status"], "ERROR")
+
     def test_cloudflare_auth_mode_requires_its_api_key(self):
         result = preflight.run_health_checks(self.config(
             email_provider="cloudflare",
