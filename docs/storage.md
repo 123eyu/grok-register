@@ -16,7 +16,7 @@ The storage package uses Python's built-in `sqlite3` module. It enables foreign 
 
 An account is identified by the case-insensitive email address plus its exact SSO value. A native registration updates the account's latest registration batch and provider metadata when the same identity already exists.
 
-Registration, authorization, CPA export, and Grok2API local/remote import are separate states. A downstream failure does not change a successfully persisted account's registration status. Disabled integrations are recorded as `not_requested`; enabled integrations are recorded as `succeeded`, `failed`, or `warning` as appropriate.
+Registration, authorization, CPA export, and Grok2API local/remote import are separate states. A downstream failure does not change a successfully persisted account's registration status. Legacy accounts and unavailable results remain `unknown`. For new registrations, disabled integrations are recorded as `not_requested`; enabled integrations are recorded as `succeeded`, `failed`, or `warning` as appropriate.
 
 ## Legacy compatibility
 
