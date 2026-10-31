@@ -40,6 +40,9 @@ class AccountServiceTests(unittest.TestCase):
         stored = self.database.get_account(first["account_id"])
         self.assertEqual(stored["email_provider"], "duckmail")
         self.assertEqual(stored["registration_run_id"], self.run_id)
+        self.assertEqual(len(stored["artifacts"]), 1)
+        self.assertEqual(stored["artifacts"][0]["artifact_type"], "legacy_txt")
+        self.assertEqual(stored["artifacts"][0]["path"], str(self.output_path.resolve()))
 
     def test_integration_statuses_are_saved_without_credentials_in_errors(self):
         account = SimpleNamespace(
