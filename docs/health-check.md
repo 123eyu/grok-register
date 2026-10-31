@@ -28,7 +28,7 @@ API 仅允许同源 WebUI 请求，响应包含 `Cache-Control: no-store`。注�
 
 ## 状态含义
 
-每项检查返回 `OK`、`WARN` 或 `ERROR)，并标记该依赖是必需还是可选。
+每项检查返回 `OK`、`WARN` 或 `ERROR`，并标记该依赖是必需还是可选。
 
 - 必需依赖出现 `ERROR` 时，整体结果变为 `Needs attention`。
 - 可选依赖出现 `WARN` 不会阻断整体 `Ready`。CPA 和 Grok2API 属于可选后处理集成。
