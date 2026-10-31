@@ -91,7 +91,10 @@ class ReauthenticationJobTests(unittest.TestCase):
         self.assertEqual(result["success_count"], 1)
         self.assertEqual(result["items"][0]["status"], "succeeded")
         self.assertIn("授权后处理失败", result["items"][0]["error_message"])
-        self.assertEqual(self.database.get_account(self.account_id)["sso"], "new-session")
+        account = self.database.get_account(self.account_id)
+        self.assertEqual(account["sso"], "new-session")
+        self.assertEqual(account["cpa_status"], "unknown")
+        self.assertEqual(account["grok2api_local_status"], "unknown")
 
     def test_missing_password_is_recorded_without_attempting_login(self):
         second, _ = self.database.insert_account({
