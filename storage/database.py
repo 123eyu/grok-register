@@ -10,7 +10,7 @@ import sqlite3
 from filelock import FileLock
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _MIGRATIONS = {
     1: (
@@ -102,6 +102,17 @@ _MIGRATIONS = {
             malformed_count INTEGER NOT NULL DEFAULT 0,
             imported_at TEXT NOT NULL
         )""",
+    ),
+    3: (
+        "ALTER TABLE accounts ADD COLUMN cpa_status TEXT NOT NULL DEFAULT 'not_requested'",
+        "ALTER TABLE accounts ADD COLUMN cpa_error TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN grok2api_local_status TEXT NOT NULL DEFAULT 'not_requested'",
+        "ALTER TABLE accounts ADD COLUMN grok2api_local_error TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN grok2api_remote_status TEXT NOT NULL DEFAULT 'not_requested'",
+        "ALTER TABLE accounts ADD COLUMN grok2api_remote_error TEXT NOT NULL DEFAULT ''",
+        "CREATE INDEX idx_accounts_cpa_status ON accounts(cpa_status)",
+        "CREATE INDEX idx_accounts_grok2api_local_status ON accounts(grok2api_local_status)",
+        "CREATE INDEX idx_accounts_grok2api_remote_status ON accounts(grok2api_remote_status)",
     ),
 }
 
@@ -308,7 +319,7 @@ class Database:
         allowed = {
             "status", "processed_count", "success_count", "failed_count",
             "uncertain_count", "postprocess_warning_count", "cancelled",
-            "finished_at", "error_message",
+            "finished_at", "error_message", "requested_count",
         }
         values = [(key, value) for key, value in updates.items() if key in allowed]
         if not values:
@@ -321,13 +332,60 @@ class Database:
             )
             return cursor.rowcount == 1
 
+    def create_registration_attempt(
+        self, registration_run_id, attempt_number, worker_key, stage, status,
+        account_id=None, error_type="", error_message="", started_at=None,
+        finished_at=None,
+    ):
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """INSERT INTO registration_attempts (
+                    registration_run_id, account_id, attempt_number, worker_key,
+                    stage, status, error_type, error_message, started_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    int(registration_run_id), account_id, int(attempt_number),
+                    str(worker_key or ""), str(stage or ""), str(status),
+                    str(error_type or ""), str(error_message or "")[:500],
+                    str(started_at or utc_now()), str(finished_at or utc_now()),
+                ),
+            )
+            return cursor.lastrowid
+
+    def update_account_integration_status(
+        self, account_id, cpa_status, cpa_error,
+        grok2api_local_status, grok2api_local_error,
+        grok2api_remote_status, grok2api_remote_error,
+    ):
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """UPDATE accounts SET
+                    cpa_status = ?, cpa_error = ?,
+                    grok2api_local_status = ?, grok2api_local_error = ?,
+                    grok2api_remote_status = ?, grok2api_remote_error = ?,
+                    updated_at = ?
+                WHERE id = ?""",
+                (
+                    cpa_status, str(cpa_error or "")[:500],
+                    grok2api_local_status, str(grok2api_local_error or "")[:500],
+                    grok2api_remote_status, str(grok2api_remote_error or "")[:500],
+                    utc_now(), int(account_id),
+                ),
+            )
+            return cursor.rowcount == 1
+
     def list_registration_runs(self, limit=50, offset=0):
         with self.connection() as connection:
             total = connection.execute("SELECT COUNT(*) FROM registration_runs").fetchone()[0]
             rows = connection.execute(
                 """SELECT id, status, requested_count, processed_count, success_count,
                           failed_count, uncertain_count, postprocess_warning_count,
-                          cancelled, started_at, finished_at, error_message
+                          cancelled, started_at, finished_at, error_message,
+                          CASE WHEN processed_count > 0
+                               THEN ROUND(success_count * 100.0 / processed_count, 2)
+                               ELSE 0 END AS success_rate,
+                          (SELECT COUNT(*) FROM registration_attempts a
+                           WHERE a.registration_run_id = registration_runs.id) AS attempt_count
                    FROM registration_runs
                    ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?""",
                 (int(limit), int(offset)),
@@ -337,7 +395,8 @@ class Database:
     def list_accounts(
         self, limit=50, offset=0, search="", registration_status="",
         authorization_status="", email_provider="", registration_run_id=None,
-        date_from="", date_to="",
+        date_from="", date_to="", cpa_status="", grok2api_local_status="",
+        grok2api_remote_status="",
     ):
         conditions = []
         parameters = []
@@ -349,6 +408,9 @@ class Database:
             ("registration_status", registration_status),
             ("authorization_status", authorization_status),
             ("email_provider", email_provider),
+            ("cpa_status", cpa_status),
+            ("grok2api_local_status", grok2api_local_status),
+            ("grok2api_remote_status", grok2api_remote_status),
         ):
             if value:
                 conditions.append(column + " = ?")
@@ -357,10 +419,10 @@ class Database:
             conditions.append("registration_run_id = ?")
             parameters.append(int(registration_run_id))
         if date_from:
-            conditions.append("created_at >= ?")
+            conditions.append("julianday(created_at) >= julianday(?)")
             parameters.append(date_from)
         if date_to:
-            conditions.append("created_at <= ?")
+            conditions.append("julianday(created_at) <= julianday(?)")
             parameters.append(date_to)
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         with self.connection() as connection:
@@ -369,7 +431,8 @@ class Database:
             ).fetchone()[0]
             rows = connection.execute(
                 """SELECT id, email, email_provider, registration_status,
-                          authorization_status, source, registration_run_id,
+                          authorization_status, cpa_status, grok2api_local_status,
+                          grok2api_remote_status, source, registration_run_id,
                           created_at, updated_at, last_authenticated_at
                    FROM accounts""" + where + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
                 parameters + [int(limit), int(offset)],
@@ -385,6 +448,14 @@ class Database:
                 return None
             account = dict(row)
             account["profile"] = json.loads(account.pop("profile_json"))
+            account["attempts"] = [
+                dict(item) for item in connection.execute(
+                    """SELECT id, registration_run_id, attempt_number, worker_key,
+                              stage, status, error_type, error_message, started_at, finished_at
+                       FROM registration_attempts WHERE account_id = ? ORDER BY id DESC""",
+                    (int(account_id),),
+                ).fetchall()
+            ]
             account["artifacts"] = [
                 dict(item) for item in connection.execute(
                     """SELECT id, artifact_type, path, format, created_at
@@ -393,6 +464,17 @@ class Database:
                 ).fetchall()
             ]
             return account
+
+    def delete_accounts(self, account_ids):
+        ids = list(dict.fromkeys(int(value) for value in account_ids))
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _value in ids)
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM accounts WHERE id IN (%s)" % placeholders, ids
+            )
+            return cursor.rowcount
 
     def delete_account(self, account_id):
         with self.transaction() as connection:
@@ -419,18 +501,37 @@ class Database:
     def account_stats(self):
         with self.connection() as connection:
             total = connection.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
-            registration = connection.execute(
-                "SELECT registration_status, COUNT(*) AS count FROM accounts GROUP BY registration_status"
-            ).fetchall()
-            authorization = connection.execute(
-                "SELECT authorization_status, COUNT(*) AS count FROM accounts GROUP BY authorization_status"
-            ).fetchall()
-            providers = connection.execute(
-                "SELECT email_provider, COUNT(*) AS count FROM accounts GROUP BY email_provider"
-            ).fetchall()
+            grouped = {}
+            for column in (
+                "registration_status", "authorization_status", "cpa_status",
+                "grok2api_local_status", "grok2api_remote_status", "email_provider",
+            ):
+                rows = connection.execute(
+                    "SELECT %s AS value, COUNT(*) AS count FROM accounts GROUP BY %s" % (column, column)
+                ).fetchall()
+                grouped[column] = {row["value"]: row["count"] for row in rows}
+            runs = connection.execute(
+                """SELECT COUNT(*) AS run_count,
+                          COALESCE(SUM(processed_count), 0) AS processed_count,
+                          COALESCE(SUM(success_count), 0) AS success_count
+                   FROM registration_runs"""
+            ).fetchone()
+            attempts = connection.execute(
+                "SELECT COUNT(*) FROM registration_attempts"
+            ).fetchone()[0]
+        processed = int(runs["processed_count"])
+        successes = int(runs["success_count"])
         return {
             "total": total,
-            "by_registration_status": {row["registration_status"]: row["count"] for row in registration},
-            "by_authorization_status": {row["authorization_status"]: row["count"] for row in authorization},
-            "by_email_provider": {row["email_provider"]: row["count"] for row in providers},
+            "by_registration_status": grouped["registration_status"],
+            "by_authorization_status": grouped["authorization_status"],
+            "by_cpa_status": grouped["cpa_status"],
+            "by_grok2api_local_status": grouped["grok2api_local_status"],
+            "by_grok2api_remote_status": grouped["grok2api_remote_status"],
+            "by_email_provider": grouped["email_provider"],
+            "run_count": int(runs["run_count"]),
+            "attempt_count": attempts,
+            "processed_count": processed,
+            "success_count": successes,
+            "success_rate": round(successes * 100.0 / processed, 2) if processed else 0.0,
         }
