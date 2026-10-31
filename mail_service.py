@@ -973,8 +973,8 @@ def extract_verification_code(text, subject=""):
         r"(?:验证码|确认码|校验码|一次性密码)\s*(?:是|为|[:：])?\s*"
         + _CODE_TOKEN_BOUNDARY,
         _CODE_TOKEN_BOUNDARY
-        + r"[\s\S]{0,80}?(?:is\s+your\s+(?:confirmation|verification|security)?\s*"
-        r"(?:code|pin|passcode)|(?:confirmation|verification)\s*code|作为您的验证码)",
+        + r"\s*(?:is\s+your\s+(?:confirmation|verification|security)?\s*"
+        r"(?:code|pin|passcode)|(?:confirmation|verification)\s+code|作为您的验证码)",
     ]
     contextual_codes = _matching_codes(context_patterns, text)
     if len(contextual_codes) == 1:
