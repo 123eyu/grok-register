@@ -454,19 +454,15 @@ def cloudflare_get_oai_code(
 
             # Always inspect the latest list payload. Some providers fill the
             # same message object in-place after the initial notification.
-            subject = str(msg.get("subject", "") or "")
-            combined = normalize_mail_body(msg)
+            subject, combined = normalize_mail_message(msg)
 
             detail_attempt = _detail_retry_attempt(detail_retries, msg_id)
             if detail_attempt:
                 try:
                     detail = cloudflare_get_message_detail(api_base, dev_token, msg_id)
-                    detail_body = normalize_mail_body(detail)
-                    detail_subject = str(detail.get("subject", "") or "")
+                    detail_subject, detail_body = normalize_mail_message(detail)
                     if detail_body:
                         combined += "\n" + detail_body
-                    if detail_subject:
-                        combined += "\n" + detail_subject
                     if not subject:
                         subject = detail_subject
                 except Exception as exc:
@@ -829,8 +825,7 @@ def cloudmail_get_oai_code(
             if target_address and target_address != email.lower():
                 continue
             code_value = str(msg.get("code", "") or "").strip()
-            combined = normalize_mail_body(msg)
-            subject = str(msg.get("subject", "") or "")
+            subject, combined = normalize_mail_message(msg)
             if log_callback:
                 log_callback(f"[Debug] Cloud Mail 收到邮件: {subject}")
             code = extract_verification_code(combined, subject)
@@ -902,8 +897,7 @@ def duckmail_get_oai_code(
             if email.lower() not in recipients:
                 continue
 
-            subject = str(msg.get("subject", "") or "")
-            combined = normalize_mail_body(msg)
+            subject, combined = normalize_mail_message(msg)
             code = extract_verification_code(combined, subject)
             if code:
                 if log_callback:
@@ -919,8 +913,9 @@ def duckmail_get_oai_code(
                 if log_callback:
                     log_callback(f"[Debug] 获取邮件详情失败 id={msg_id} attempt={detail_attempt}: {exc}")
                 continue
-            combined = normalize_mail_body(detail)
-            subject = str(detail.get("subject", "") or "")
+            detail_subject, detail_body = normalize_mail_message(detail)
+            combined = "\n".join(part for part in (combined, detail_body) if part)
+            subject = subject or detail_subject
             if log_callback:
                 log_callback(f"[Debug] 收到邮件: {subject}")
             code = extract_verification_code(combined, subject)
@@ -1295,8 +1290,7 @@ def yyds_get_oai_code(
             if address.lower() not in to_addrs:
                 continue
 
-            subject = str(msg.get("subject", "") or "")
-            combined = normalize_mail_body(msg)
+            subject, combined = normalize_mail_message(msg)
             code = extract_verification_code(combined, subject)
             if code:
                 if log_callback:
@@ -1312,8 +1306,9 @@ def yyds_get_oai_code(
                 if log_callback:
                     log_callback(f"[Debug] YYDS 获取邮件详情失败 id={msg_id} attempt={detail_attempt}: {exc}")
                 continue
-            combined = normalize_mail_body(detail)
-            subject = str(detail.get("subject", "") or "")
+            detail_subject, detail_body = normalize_mail_message(detail)
+            combined = "\n".join(part for part in (combined, detail_body) if part)
+            subject = subject or detail_subject
             if log_callback:
                 log_callback(f"[Debug] YYDS 收到邮件: {subject}")
             code = extract_verification_code(combined, subject)
@@ -1462,16 +1457,4 @@ class CloudflareMailClient:
 
     @staticmethod
     def flatten_mail_text(item, detail):
-        subject = str(item.get("subject") or detail.get("subject") or "")
-        parts = []
-        for source in (item, detail):
-            for key in ("text", "raw", "content", "intro", "body", "snippet"):
-                value = source.get(key)
-                if isinstance(value, str) and value.strip():
-                    parts.append(value)
-            html_value = source.get("html")
-            if isinstance(html_value, str):
-                html_value = [html_value]
-            if isinstance(html_value, list):
-                parts.extend(re.sub(r"<[^>]+>", " ", item) for item in html_value if isinstance(item, str))
-        return subject, "\n".join(parts)
+        return normalize_mail_message(item, detail)
