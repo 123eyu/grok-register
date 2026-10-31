@@ -41,6 +41,12 @@ def _check_configuration(config):
     validation_config["cpa_base_url"] = DEFAULT_CONFIG["cpa_base_url"]
     validation_config["grok2api_remote_base"] = ""
     validation_config["grok2api_pool_name"] = DEFAULT_CONFIG["grok2api_pool_name"]
+    for key in (
+        "cpa_mint_timeout_sec",
+        "cpa_oidc_request_timeout_sec",
+        "cpa_oidc_poll_timeout_sec",
+    ):
+        validation_config[key] = DEFAULT_CONFIG[key]
     provider = str(config.get("email_provider") or "duckmail").lower()
     if provider != "cloudflare":
         validation_config["cloudflare_api_base"] = DEFAULT_CONFIG["cloudflare_api_base"]
@@ -184,6 +190,14 @@ def _check_cpa_config(config):
     try:
         from cpa_export import CpaExportSettings, _load_mint_and_export
 
+        for key, minimum, maximum in (
+            ("cpa_mint_timeout_sec", 30, 1800),
+            ("cpa_oidc_request_timeout_sec", 3, 120),
+            ("cpa_oidc_poll_timeout_sec", 3, 120),
+        ):
+            value = config.get(key)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError("%s 超出有效范围" % key)
         settings = CpaExportSettings.from_config(config)
         parsed = urllib.parse.urlsplit(settings.base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
