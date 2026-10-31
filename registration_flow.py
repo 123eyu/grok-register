@@ -346,6 +346,18 @@ def _notify_attempt(callbacks, slot_index, attempt_number, started_at, account, 
     if not callable(callback):
         return
     message = str(error or "")
+    error_type = type(error).__name__ if error is not None else ""
+    if error is None and output is not None:
+        warnings = [
+            (output.save_error, "AccountPersistenceError"),
+            (output.legacy_export_error, "LegacyExportError"),
+            (output.status_persist_error, "IntegrationStatusPersistenceError"),
+        ]
+        for detail, kind in warnings:
+            if detail:
+                error_type = kind
+                message = str(detail)
+                break
     if account is not None:
         for secret in (getattr(account, "password", ""), getattr(account, "sso", "")):
             if secret:
@@ -358,7 +370,7 @@ def _notify_attempt(callbacks, slot_index, attempt_number, started_at, account, 
             "stage": current_registration_stage(),
             "status": status,
             "account_id": getattr(output, "account_id", None),
-            "error_type": type(error).__name__ if error is not None else "",
+            "error_type": error_type,
             "error_message": message[:500],
             "started_at": started_at,
             "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -386,7 +398,10 @@ def _record_success(result, settings, callbacks, ops, account, output, last_clea
     pool_warning = any(isinstance(state, dict) and state.get("enabled") and not state.get("ok") for state in output.pools.values())
     cpa_warning = bool(
         output.cpa and not output.cpa.get("skipped")
-        and (not output.cpa.get("ok") or output.cpa.get("warning") or output.cpa.get("cpa_copy_error"))
+        and (
+            not output.cpa.get("ok") or output.cpa.get("warning")
+            or output.cpa.get("partial") or output.cpa.get("cpa_copy_error")
+        )
     ) or bool(output.legacy_export_error) or bool(output.status_persist_error)
     if pool_warning or cpa_warning: result.postprocess_warning_count += 1
     return last_cleanup_success_count
