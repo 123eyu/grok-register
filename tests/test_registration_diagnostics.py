@@ -61,12 +61,19 @@ class RegistrationDiagnosticsTests(unittest.TestCase):
                 Path(path).write_bytes(b"partial")
                 raise RuntimeError("browser disconnected")
 
+        class EmptyPage:
+            def get_screenshot(self, path, full_page=False):
+                Path(path).touch()
+
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(
                 capture_failure_screenshot(None, 1, {}, screenshot_dir=directory), ""
             )
             self.assertEqual(
                 capture_failure_screenshot(BrokenPage(), 1, {}, screenshot_dir=directory), ""
+            )
+            self.assertEqual(
+                capture_failure_screenshot(EmptyPage(), 1, {}, screenshot_dir=directory), ""
             )
             self.assertEqual(list(Path(directory).glob("*.png")), [])
 
