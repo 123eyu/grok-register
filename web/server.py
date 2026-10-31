@@ -235,6 +235,34 @@ def health():
     return {"ok": True}
 
 
+@app.post("/api/health-check")
+async def dependency_health_check(request: Request):
+    _require_local_origin(request)
+    payload = await request.json()
+    if not isinstance(payload, dict) or type(payload.get("connectivity", False)) is not bool:
+        raise HTTPException(status_code=400, detail="connectivity 必须是布尔值")
+
+    kind = "dependency_health_check"
+    _begin_maintenance(kind)
+    try:
+        engine.load_config()
+        cfg = engine.validate_config_structure(dict(engine.config))
+        from preflight import run_health_checks
+        result = await run_in_threadpool(
+            run_health_checks, cfg, payload.get("connectivity", False), _append_log
+        )
+    except (engine.ConfigError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        _end_maintenance(kind)
+
+    _append_log(
+        "[*] 依赖健康检查完成: Result: %s | errors=%s warnings=%s"
+        % (result["result"], result["error_count"], result["warning_count"])
+    )
+    return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/config")
 def get_config():
     return {"ok": True, "config": _load_config_if_idle()}
