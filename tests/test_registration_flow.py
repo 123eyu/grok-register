@@ -267,5 +267,85 @@ class RegistrationFlowTests(unittest.TestCase):
         self.assertEqual(batch.success_count, 1)
         self.assertEqual(batch.postprocess_warning_count, 1)
 
+    def test_failure_screenshot_is_captured_before_final_cleanup(self):
+        fake = FakeOps()
+        ops = fake.operations()
+        events = []
+        ops.start_browser = lambda: (_ for _ in ()).throw(RuntimeError("browser start failed"))
+        ops.capture_failure_diagnostics = lambda details: (
+            events.append(("screenshot", details["stage"], details["status"])) or "/tmp/failure.png"
+        )
+        ops.cleanup = lambda reason: events.append(("cleanup", reason))
+        attempts = []
+        callbacks = RegistrationCallbacks(
+            log=lambda _message: None,
+            cancelled=lambda: False,
+            record_attempt=attempts.append,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "browser start failed"):
+            run_batch(1, callbacks, lambda *_args: None, ops)
+
+        self.assertEqual(events[0], ("screenshot", "browser_start", "failed"))
+        self.assertEqual(events[1], ("cleanup", "任务结束"))
+        self.assertEqual(attempts[0]["failure_type"], "browser")
+        self.assertEqual(attempts[0]["screenshot_path"], "/tmp/failure.png")
+        self.assertIn("browser start failed", attempts[0]["traceback"])
+
+    def test_screenshot_failure_does_not_replace_registration_error_or_skip_cleanup(self):
+        fake = FakeOps()
+        ops = fake.operations()
+        events = []
+        ops.start_browser = lambda: (_ for _ in ()).throw(RuntimeError("original failure"))
+        ops.capture_failure_diagnostics = lambda _details: (
+            _ for _ in ()
+        ).throw(OSError("screenshot disk full"))
+        ops.cleanup = lambda reason: events.append(reason)
+        attempts = []
+        logs = []
+        callbacks = RegistrationCallbacks(
+            log=logs.append,
+            cancelled=lambda: False,
+            record_attempt=attempts.append,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "original failure"):
+            run_batch(1, callbacks, lambda *_args: None, ops)
+
+        self.assertEqual(events, ["任务结束"])
+        self.assertEqual(attempts[0]["screenshot_path"], "")
+        self.assertEqual(attempts[0]["error_message"], "original failure")
+        self.assertTrue(any("失败截图捕获异常" in message for message in logs))
+
+    def test_retrying_attempt_captures_screenshot_without_changing_retry(self):
+        fake = FakeOps()
+        ops = fake.operations()
+        starts = {"count": 0}
+        screenshots = []
+
+        def start_browser():
+            starts["count"] += 1
+            if starts["count"] == 1:
+                raise RecoverablePreSubmitError("temporary browser failure")
+
+        ops.start_browser = start_browser
+        ops.capture_failure_diagnostics = lambda details: (
+            screenshots.append(details) or "/tmp/retry.png"
+        )
+        attempts = []
+        callbacks = RegistrationCallbacks(
+            log=lambda _message: None,
+            cancelled=lambda: False,
+            record_attempt=attempts.append,
+        )
+
+        batch = run_batch(1, callbacks, lambda *_args: None, ops)
+
+        self.assertEqual(batch.success_count, 1)
+        self.assertEqual([item["status"] for item in attempts], ["retrying", "succeeded"])
+        self.assertEqual(len(screenshots), 1)
+        self.assertEqual(attempts[0]["failure_type"], "browser")
+        self.assertEqual(attempts[0]["screenshot_path"], "/tmp/retry.png")
+
 if __name__ == "__main__":
     unittest.main()
