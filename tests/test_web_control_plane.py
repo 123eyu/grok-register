@@ -409,12 +409,18 @@ class WebControlPlaneTests(unittest.TestCase):
     def test_account_api_requires_same_origin_for_sensitive_detail(self):
         database = self._new_database()
         account_id, _ = database.insert_account({"email": "one@example.com", "sso": "token"})
+        run_id = database.create_registration_run(1)
         with patch.object(self.server, "_get_database", return_value=database):
             response = self.client.get(
                 "/api/accounts/%s" % account_id,
                 headers={"origin": "https://attacker.example"},
             )
+            attempts = self.client.get(
+                "/api/jobs/history/%s/attempts" % run_id,
+                headers={"origin": "https://attacker.example"},
+            )
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(attempts.status_code, 403)
 
     def test_database_api_imports_existing_legacy_files_before_listing(self):
         with tempfile.TemporaryDirectory() as directory:
