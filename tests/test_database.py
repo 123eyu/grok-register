@@ -48,6 +48,11 @@ class DatabaseTests(unittest.TestCase):
                 row["name"] for row in connection.execute("PRAGMA table_info(registration_runs)")
             }
         self.assertIn("registered_unsaved_count", columns)
+        with migrated.connection() as connection:
+            attempt_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(registration_attempts)")
+            }
+        self.assertTrue({"failure_type", "screenshot_path"}.issubset(attempt_columns))
 
     def test_migrates_existing_v2_database_to_latest_schema(self):
         path = Path(self.temp_dir.name) / "legacy-v2.sqlite3"
@@ -169,6 +174,52 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):
             self.database.add_artifact(999, "legacy_txt", "/tmp/a.txt", "txt")
 
+
+    def test_registration_attempts_store_failure_diagnostics(self):
+        run_id = self.database.create_registration_run(1)
+        account_id, _ = self.database.insert_account({
+            "email": "diagnostic@example.com", "sso": "token",
+        })
+        self.database.create_registration_attempt(
+            run_id,
+            slot_index=1,
+            attempt_number=2,
+            worker_key="grok-register_1",
+            stage="browser_start",
+            status="failed",
+            account_id=account_id,
+            error_type="TimeoutError",
+            error_message="browser timed out",
+            traceback="Traceback (most recent call last): ...",
+            failure_type="browser",
+            screenshot_path="/private/diagnostics/failure.png",
+        )
+
+        attempts = self.database.list_registration_attempts(run_id)
+        account = self.database.get_account(account_id)
+        attempt = attempts["items"][0]
+
+        self.assertEqual(attempts["total"], 1)
+        self.assertEqual(attempt["failure_type"], "browser")
+        self.assertEqual(attempt["screenshot_path"], "/private/diagnostics/failure.png")
+        self.assertIn("Traceback", attempt["traceback"])
+        self.assertEqual(account["attempts"][0]["screenshot_path"], attempt["screenshot_path"])
+
+    def test_registration_attempt_list_rejects_unknown_run(self):
+        self.assertIsNone(self.database.list_registration_attempts(999))
+
+    def test_registration_attempt_keeps_legacy_positional_timestamp_arguments(self):
+        run_id = self.database.create_registration_run(1)
+        self.database.create_registration_attempt(
+            run_id, 1, 1, "worker-1", "browser_start", "failed",
+            None, "RuntimeError", "browser failed",
+            "2026-10-31T12:00:00+00:00", "2026-10-31T12:00:01+00:00",
+        )
+
+        attempt = self.database.list_registration_attempts(run_id)["items"][0]
+        self.assertEqual(attempt["started_at"], "2026-10-31T12:00:00+00:00")
+        self.assertEqual(attempt["finished_at"], "2026-10-31T12:00:01+00:00")
+        self.assertEqual(attempt["traceback"], "")
 
     def test_registration_attempts_and_run_success_rate(self):
         run_id = self.database.create_registration_run(2, {"email_provider": "duckmail"})

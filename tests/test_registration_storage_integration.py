@@ -83,5 +83,66 @@ class RegistrationStorageIntegrationTests(unittest.TestCase):
             self.assertEqual(account["attempts"][0]["account_id"], account["id"])
 
 
+    def test_failed_serial_registration_saves_screenshot_and_traceback_before_cleanup(self):
+        from registration_diagnostics import capture_failure_screenshot
+        from storage.database import Database
+
+        class FakePage:
+            def get_screenshot(self, path, full_page=False):
+                Path(path).write_bytes(b"fake-browser-screenshot")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "accounts.sqlite3"
+            output_path = root / "accounts-run.txt"
+            screenshot_dir = root / "diagnostics" / "registration"
+            config = dict(engine.DEFAULT_CONFIG)
+            config.update({
+                "database_path": str(database_path),
+                "email_provider": "duckmail",
+                "multi_thread_enabled": False,
+            })
+
+            def capture(page, run_id, details, log_callback=None, screenshot_dir=None):
+                return capture_failure_screenshot(
+                    page, run_id, details, log_callback=log_callback,
+                    screenshot_dir=screenshot_dir,
+                )
+
+            patches = [
+                patch.object(engine, "config", config),
+                patch.object(engine, "start_browser", side_effect=RuntimeError("browser start failed")),
+                patch.object(engine._registration_browser, "page", FakePage()),
+                patch.object(engine, "cleanup_runtime_memory"),
+                patch("registration_flow.begin_registration_slot"),
+                patch("registration_flow.end_registration_slot"),
+                patch("registration_diagnostics.capture_failure_screenshot", side_effect=capture),
+            ]
+
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+                with self.assertRaisesRegex(RuntimeError, "browser start failed"):
+                    engine.run_registration_common(
+                        1, lambda _message: None, lambda: False,
+                        str(output_path), lambda *_args: None,
+                    )
+
+            database = Database(database_path)
+            run = database.list_registration_runs()["items"][0]
+            attempts = database.list_registration_attempts(run["id"])
+            attempt = attempts["items"][0]
+
+            self.assertEqual(run["status"], "failed")
+            self.assertEqual(attempt["status"], "failed")
+            self.assertEqual(attempt["failure_type"], "browser")
+            self.assertEqual(attempt["error_type"], "RuntimeError")
+            self.assertIn("browser start failed", attempt["traceback"])
+            self.assertTrue(Path(attempt["screenshot_path"]).is_file())
+            self.assertEqual(Path(attempt["screenshot_path"]).parent, screenshot_dir)
+            self.assertEqual(
+                Path(attempt["screenshot_path"]).read_bytes(),
+                b"fake-browser-screenshot",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

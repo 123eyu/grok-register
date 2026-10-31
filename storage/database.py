@@ -11,7 +11,7 @@ import sqlite3
 from filelock import FileLock
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _MIGRATIONS = {
     1: (
@@ -124,6 +124,10 @@ _MIGRATIONS = {
     ),
     5: (
         "ALTER TABLE registration_runs ADD COLUMN registered_unsaved_count INTEGER NOT NULL DEFAULT 0 CHECK (registered_unsaved_count >= 0)",
+    ),
+    6: (
+        "ALTER TABLE registration_attempts ADD COLUMN failure_type TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE registration_attempts ADD COLUMN screenshot_path TEXT NOT NULL DEFAULT ''",
     ),
 }
 
@@ -380,22 +384,46 @@ class Database:
     def create_registration_attempt(
         self, registration_run_id, slot_index, attempt_number, worker_key, stage, status,
         account_id=None, error_type="", error_message="", started_at=None,
-        finished_at=None,
+        finished_at=None, traceback="", failure_type="", screenshot_path="",
     ):
         with self.transaction() as connection:
             cursor = connection.execute(
                 """INSERT INTO registration_attempts (
                     registration_run_id, slot_index, account_id, attempt_number, worker_key,
-                    stage, status, error_type, error_message, started_at, finished_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    stage, status, error_type, error_message, traceback, failure_type,
+                    screenshot_path, started_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     int(registration_run_id), int(slot_index), account_id, int(attempt_number),
                     str(worker_key or ""), str(stage or ""), str(status),
                     str(error_type or ""), str(error_message or "")[:500],
-                    str(started_at or utc_now()), str(finished_at or utc_now()),
+                    str(traceback or "")[:8000], str(failure_type or ""),
+                    str(screenshot_path or ""), str(started_at or utc_now()),
+                    str(finished_at or utc_now()),
                 ),
             )
             return cursor.lastrowid
+
+    def list_registration_attempts(self, registration_run_id, limit=50, offset=0):
+        with self.connection() as connection:
+            if connection.execute(
+                "SELECT 1 FROM registration_runs WHERE id = ?", (int(registration_run_id),)
+            ).fetchone() is None:
+                return None
+            total = connection.execute(
+                "SELECT COUNT(*) FROM registration_attempts WHERE registration_run_id = ?",
+                (int(registration_run_id),),
+            ).fetchone()[0]
+            rows = connection.execute(
+                """SELECT id, registration_run_id, slot_index, account_id, attempt_number,
+                          worker_key, stage, status, error_type, error_message, traceback,
+                          failure_type, screenshot_path, started_at, finished_at
+                   FROM registration_attempts
+                   WHERE registration_run_id = ?
+                   ORDER BY id DESC LIMIT ? OFFSET ?""",
+                (int(registration_run_id), int(limit), int(offset)),
+            ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": total}
 
     def update_account_integration_status(
         self, account_id, cpa_status, cpa_error,
@@ -496,7 +524,8 @@ class Database:
             account["attempts"] = [
                 dict(item) for item in connection.execute(
                     """SELECT id, registration_run_id, slot_index, account_id, attempt_number, worker_key,
-                              stage, status, error_type, error_message, started_at, finished_at
+                              stage, status, error_type, error_message, traceback, failure_type,
+                              screenshot_path, started_at, finished_at
                        FROM registration_attempts WHERE account_id = ? ORDER BY id DESC""",
                     (int(account_id),),
                 ).fetchall()

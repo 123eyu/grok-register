@@ -73,7 +73,8 @@ def _aggregate(snapshots):
 def run_parallel_batch(count, callbacks, observer, runtime_namespace, accounts_output_file,
                        workers=4, enable_nsfw=True, cleanup_interval=5,
                        max_slot_retry=3, max_mail_retry=3, persist_account_record=None,
-                       persist_account_status=None):
+                       persist_account_status=None, registration_run_id=None,
+                       diagnostics_dir=None):
     worker_counts = split_worker_counts(count, workers)
     if len(worker_counts) <= 1:
         raise ValueError("parallel batch requires at least two active workers")
@@ -168,6 +169,8 @@ def run_parallel_batch(count, callbacks, observer, runtime_namespace, accounts_o
             worker_log("%s: 关闭本 worker 注册浏览器" % reason)
             browser_module.stop_browser()
 
+        from registration_diagnostics import capture_failure_screenshot
+
         operations = RegistrationOperations(
             start_browser=lambda: browser_module.start_browser(log_callback=worker_log),
             restart_browser=lambda: browser_module.restart_browser(log_callback=worker_log),
@@ -212,6 +215,13 @@ def run_parallel_batch(count, callbacks, observer, runtime_namespace, accounts_o
             preflight_mail=preflight_mail,
             persist_account_record=persist_account_record,
             persist_account_status=persist_account_status,
+            capture_failure_diagnostics=lambda details: capture_failure_screenshot(
+                browser_module.page,
+                registration_run_id,
+                details,
+                log_callback=worker_log,
+                screenshot_dir=diagnostics_dir,
+            ),
         )
 
         def worker_observer(batch, account, output):
