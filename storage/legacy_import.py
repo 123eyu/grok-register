@@ -64,7 +64,7 @@ def import_legacy_accounts(database, path, email_provider=""):
                 })
 
         inserted = database.insert_accounts(records)
-        account_ids = [account_id for account_id, _created in inserted]
+        account_ids = [account_id for account_id, _created in inserted if account_id is not None]
         _attach_source(database, account_ids, "legacy_txt", source, "txt")
         return _summary(source, records, malformed, inserted)
 
