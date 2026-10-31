@@ -20,6 +20,14 @@ def _result(key, name, status, required, message, connection_tested=False):
     }
 
 
+def _valid_http_url(value):
+    try:
+        parsed = urllib.parse.urlsplit(str(value or "").strip())
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
 def _safe_error(error, config):
     message = str(error or type(error).__name__)
     for key in (
@@ -112,8 +120,7 @@ def _check_proxy_config(config):
             else:
                 source_errors.append("代理池文件不存在或为空")
         if subscription:
-            parsed = urllib.parse.urlsplit(subscription)
-            if parsed.scheme in {"http", "https"} and parsed.netloc:
+            if _valid_http_url(subscription):
                 valid_sources += 1
             else:
                 source_errors.append("代理池订阅地址无效")
@@ -157,10 +164,16 @@ def _check_mailbox_config(config):
         )
     if provider in {"cloudflare", "cloudmail"}:
         base_key = "cloudflare_api_base" if provider == "cloudflare" else "cloudmail_api_base"
-        parsed = urllib.parse.urlsplit(str(config.get(base_key) or ""))
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        if not _valid_http_url(config.get(base_key)):
             return _result("mailbox", "Mailbox", "ERROR", True,
                            "%s API Base URL 无效" % provider)
+    if provider == "cloudflare":
+        auth_mode = str(config.get("cloudflare_auth_mode") or "none").lower()
+        if auth_mode != "none" and not config.get("cloudflare_api_key"):
+            return _result(
+                "mailbox", "Mailbox", "ERROR", True,
+                "Cloudflare 当前鉴权模式需要配置 cloudflare_api_key",
+            )
     if provider == "outlook":
         try:
             from outlook_mailbox_pool import get_outlook_mailbox_pool_capacity
@@ -201,8 +214,7 @@ def _check_cpa_config(config):
             if type(value) is not int or not minimum <= value <= maximum:
                 raise ValueError("%s 超出有效范围" % key)
         settings = CpaExportSettings.from_config(config)
-        parsed = urllib.parse.urlsplit(settings.base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        if not _valid_http_url(settings.base_url):
             raise ValueError("CPA Base URL 无效")
         _load_mint_and_export(settings.tools_dir)
     except Exception as exc:
@@ -253,8 +265,7 @@ def _check_grok2api_config(config):
         if config.get("grok2api_pool_name") not in {"ssoBasic", "ssoSuper"}:
             warnings.append("远端 token 池名称无效")
         base = str(config.get("grok2api_remote_base") or "").strip()
-        parsed = urllib.parse.urlsplit(base)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        if not _valid_http_url(base):
             warnings.append("远端 Base URL 无效")
         has_app_key = bool(config.get("grok2api_remote_app_key"))
         has_username = bool(config.get("grok2api_remote_admin_username"))
