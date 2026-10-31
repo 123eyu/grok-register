@@ -624,8 +624,8 @@ class Database:
             )
             counts = connection.execute(
                 """SELECT COUNT(*) AS processed,
-                          SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS successes,
-                          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failures
+                          COALESCE(SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END), 0) AS successes,
+                          COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failures
                    FROM job_accounts
                    WHERE job_id = ? AND status IN ('succeeded', 'failed')""",
                 (job_id,),
