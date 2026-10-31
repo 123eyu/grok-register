@@ -159,9 +159,13 @@ class ReauthenticationJobTests(unittest.TestCase):
         second, _ = self.database.insert_account({
             "email": "user@example.com", "password": "pw2", "sso": "different-token",
         })
-        result = self._run(account_ids=[self.account_id, second])
+        result = self._run(
+            account_ids=[self.account_id, second],
+            login=lambda _email, password, **_kwargs: "new-session-" + password,
+        )
         self.assertEqual(result["requested_count"], 2)
         self.assertEqual(result["processed_count"], 2)
+        self.assertEqual(result["success_count"], 2)
         self.assertEqual({item["account_id"] for item in result["items"]}, {
             self.account_id, second,
         })
