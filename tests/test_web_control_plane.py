@@ -362,7 +362,7 @@ class WebControlPlaneTests(unittest.TestCase):
         self.assertEqual(exported.text, "second@example.com----pw2----token2\n")
         self.assertEqual(stats.status_code, 200)
         self.assertEqual(stats.json()["success_rate"], 50.0)
-        self.assertEqual(stats.json()["by_grok2api_remote_status"], {"failed": 1, "not_requested": 1})
+        self.assertEqual(stats.json()["by_grok2api_remote_status"], {"failed": 1, "unknown": 1})
         self.assertEqual(history.status_code, 200)
         self.assertEqual(history.json()["items"][0]["attempt_count"], 1)
         self.assertEqual(history.json()["items"][0]["success_rate"], 50.0)
