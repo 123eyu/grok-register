@@ -232,5 +232,40 @@ class RegistrationFlowTests(unittest.TestCase):
         self.assertEqual(recorded[0][1]["remote"]["ok"], False)
         self.assertTrue(recorded[0][2]["warning"])
 
+    def test_attempt_history_includes_account_persistence_failure(self):
+        fake = FakeOps()
+        ops = fake.operations()
+        ops.persist_account_record = lambda _account: (_ for _ in ()).throw(OSError("disk full"))
+        attempts = []
+        callbacks = RegistrationCallbacks(
+            log=lambda _message: None,
+            cancelled=lambda: False,
+            record_attempt=attempts.append,
+        )
+
+        batch = run_batch(1, callbacks, lambda *_args: None, ops)
+
+        self.assertEqual(batch.registered_unsaved_count, 1)
+        self.assertEqual(attempts[0]["status"], "registered_unsaved")
+        self.assertEqual(attempts[0]["error_type"], "AccountPersistenceError")
+        self.assertEqual(attempts[0]["error_message"], "disk full")
+
+    def test_partial_cpa_export_counts_as_postprocess_warning(self):
+        fake = FakeOps()
+        ops = fake.operations()
+        ops.persist_account_record = lambda _account: {
+            "account_id": 7,
+            "legacy_export_error": "",
+        }
+        ops.persist_account_status = lambda *_args: True
+        ops.export_cpa = lambda *_args: {
+            "ok": True, "skipped": False, "partial": True,
+        }
+
+        batch = run_batch(1, self.callbacks(), lambda *_args: None, ops)
+
+        self.assertEqual(batch.success_count, 1)
+        self.assertEqual(batch.postprocess_warning_count, 1)
+
 if __name__ == "__main__":
     unittest.main()
