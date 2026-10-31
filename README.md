@@ -288,6 +288,12 @@ python grok_register_ttk.py check --connectivity
 
 详细说明见[依赖健康检查文档](docs/health-check.md)。
 
+### 已有账号重新认证
+
+SQLite 账号支持正常邮箱密码重新登录、SSO 更新、旧版 TXT 文件同步以及 CPA/Grok2API 授权恢复。任务可停止、查看进度和历史，使用本地 WebUI API 操作；完整图形化账号管理将在 React 前端阶段加入。
+
+详细说明见[重新认证与授权恢复](docs/reauthentication.md)。
+
 ## 配置说明
 
 项目启动时做结构校验，真正开始任务时再检查当前启用功能所需字段，因此可以先打开 GUI / WebUI 再逐步配置。
