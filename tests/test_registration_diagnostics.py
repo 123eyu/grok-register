@@ -38,6 +38,7 @@ class RegistrationDiagnosticsTests(unittest.TestCase):
             self.assertTrue(page.full_page)
             if os.name == "posix":
                 self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(saved.parent.stat().st_mode & 0o777, 0o700)
 
     def test_page_screenshot_error_returns_empty_path_and_logs(self):
         class BrokenPage:
@@ -56,7 +57,8 @@ class RegistrationDiagnosticsTests(unittest.TestCase):
 
     def test_missing_or_failed_page_returns_empty_path(self):
         class BrokenPage:
-            def get_screenshot(self, **_kwargs):
+            def get_screenshot(self, path, full_page=False):
+                Path(path).write_bytes(b"partial")
                 raise RuntimeError("browser disconnected")
 
         with tempfile.TemporaryDirectory() as directory:
@@ -66,6 +68,7 @@ class RegistrationDiagnosticsTests(unittest.TestCase):
             self.assertEqual(
                 capture_failure_screenshot(BrokenPage(), 1, {}, screenshot_dir=directory), ""
             )
+            self.assertEqual(list(Path(directory).glob("*.png")), [])
 
 
 if __name__ == "__main__":
