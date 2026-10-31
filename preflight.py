@@ -394,7 +394,7 @@ def run_health_checks(config, connectivity=False, log_callback=None):
                 check["connection_tested"] = True
             except Exception as exc:
                 check["status"] = "ERROR" if check["required"] else "WARN"
-                check["message"] = _safe_error(exc, cfg)
+                check["message"] += "；连接检查失败: " + _safe_error(exc, cfg)
                 check["connection_tested"] = True
 
     errors = sum(1 for item in checks if item["required"] and item["status"] == "ERROR")
