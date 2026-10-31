@@ -839,6 +839,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                     success_count=batch.success_count,
                     failed_count=batch.fail_count,
                     uncertain_count=batch.uncertain_count,
+                    registered_unsaved_count=batch.registered_unsaved_count,
                     postprocess_warning_count=batch.postprocess_warning_count,
                     cancelled=bool(batch.cancelled),
                 )
@@ -919,6 +920,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
             success_count=batch.success_count,
             failed_count=batch.fail_count,
             uncertain_count=batch.uncertain_count,
+            registered_unsaved_count=batch.registered_unsaved_count,
             postprocess_warning_count=batch.postprocess_warning_count,
             cancelled=bool(batch.cancelled),
             finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
