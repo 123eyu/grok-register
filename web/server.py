@@ -477,14 +477,9 @@ async def delete_accounts(request: Request):
     account_ids = payload.get("ids") if isinstance(payload, dict) else None
     if not isinstance(account_ids, list) or not account_ids:
         raise HTTPException(status_code=400, detail="请提供非空账号 ID 列表")
-    if any(isinstance(value, bool) for value in account_ids):
+    if any(type(value) is not int or value < 1 for value in account_ids):
         raise HTTPException(status_code=400, detail="账号 ID 必须是正整数")
-    try:
-        ids = [int(value) for value in account_ids]
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="账号 ID 必须是整数") from exc
-    if any(value < 1 for value in ids):
-        raise HTTPException(status_code=400, detail="账号 ID 必须大于零")
+    ids = account_ids
     deleted = _get_database().delete_accounts(ids)
     return {"ok": True, "deleted_count": deleted, "legacy_files_unchanged": True}
 
@@ -513,14 +508,9 @@ async def export_accounts(request: Request):
     account_ids = payload.get("ids") if isinstance(payload, dict) else None
     if not isinstance(account_ids, list) or not account_ids:
         raise HTTPException(status_code=400, detail="请提供非空账号 ID 列表")
-    if any(isinstance(value, bool) for value in account_ids):
+    if any(type(value) is not int or value < 1 for value in account_ids):
         raise HTTPException(status_code=400, detail="账号 ID 必须是正整数")
-    try:
-        ids = [int(value) for value in account_ids]
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="账号 ID 必须是整数") from exc
-    if any(value < 1 for value in ids):
-        raise HTTPException(status_code=400, detail="账号 ID 必须大于零")
+    ids = account_ids
     unique_ids = list(dict.fromkeys(ids))
     rows = _get_database().export_accounts(unique_ids)
     if len(rows) != len(unique_ids):
