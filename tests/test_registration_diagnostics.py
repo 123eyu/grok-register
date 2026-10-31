@@ -39,17 +39,20 @@ class RegistrationDiagnosticsTests(unittest.TestCase):
             if os.name == "posix":
                 self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
 
-    def test_fake_page_without_full_page_argument_uses_compatible_signature(self):
-        class FakePage:
-            def get_screenshot(self, path):
-                Path(path).write_bytes(b"fake-png")
+    def test_page_screenshot_error_returns_empty_path_and_logs(self):
+        class BrokenPage:
+            def get_screenshot(self, path, full_page=False):
+                raise TypeError("screenshot implementation failed")
 
         with tempfile.TemporaryDirectory() as directory:
+            logs = []
             path = capture_failure_screenshot(
-                FakePage(), 1, {"slot_index": 1, "attempt_number": 1},
-                screenshot_dir=directory,
+                BrokenPage(), 1, {"slot_index": 1, "attempt_number": 1},
+                screenshot_dir=directory, log_callback=logs.append,
             )
-            self.assertTrue(Path(path).is_file())
+            self.assertEqual(path, "")
+            self.assertEqual(len(logs), 1)
+            self.assertIn("TypeError", logs[0])
 
     def test_missing_or_failed_page_returns_empty_path(self):
         class BrokenPage:
