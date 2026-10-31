@@ -44,6 +44,6 @@ The local WebUI exposes SQLite-backed endpoints:
 - `GET /api/jobs/history`: paginated registration history with success rate and attempt counts.
 - `GET /api/jobs/history/{run_id}/attempts`: paginated attempt diagnostics, including failure type, traceback, and screenshot path.
 
-Failed and retrying browser attempts capture a screenshot before final browser cleanup. Screenshots are stored under `data/diagnostics/registration/` with restrictive file permissions; screenshot errors are logged but never replace the original registration result. Attempts that fail before an account exists remain discoverable through the batch-attempt endpoint.
+Failed and retrying browser attempts capture a screenshot before final browser cleanup. Screenshots are stored under `diagnostics/registration/` beside the configured SQLite database (under `data/diagnostics/registration/` by default). On POSIX systems, the directory and files use `0700` and `0600` permissions; screenshot errors are logged but never replace the original registration result. Attempts that fail before an account exists remain discoverable through the batch-attempt endpoint.
 
 Account endpoints that expose or mutate account data require same-origin local WebUI requests. Account list responses omit passwords and SSO values; account details, attempt tracebacks, screenshot paths, and explicit exports are sensitive and remain local-only.
