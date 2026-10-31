@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ import sqlite3
 from filelock import FileLock
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _MIGRATIONS = {
     1: (
@@ -115,6 +116,12 @@ _MIGRATIONS = {
         "CREATE INDEX idx_accounts_grok2api_local_status ON accounts(grok2api_local_status)",
         "CREATE INDEX idx_accounts_grok2api_remote_status ON accounts(grok2api_remote_status)",
     ),
+    4: (
+        """CREATE TABLE account_tombstones (
+            identity_hash TEXT PRIMARY KEY,
+            deleted_at TEXT NOT NULL
+        )""",
+    ),
 }
 
 
@@ -124,6 +131,11 @@ def utc_now():
 
 def _json_text(value):
     return json.dumps(value if value is not None else {}, ensure_ascii=False, separators=(",", ":"))
+
+
+def _account_identity_hash(email, sso):
+    identity = str(email).strip().casefold() + "\0" + str(sso).strip()
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 class Database:
@@ -204,6 +216,18 @@ class Database:
         profile = record.get("profile")
         registration_status = str(record.get("registration_status") or "registered")
         source = str(record.get("source") or "native")
+        identity_hash = _account_identity_hash(email, sso)
+        tombstone = connection.execute(
+            "SELECT 1 FROM account_tombstones WHERE identity_hash = ?",
+            (identity_hash,),
+        ).fetchone()
+        if tombstone is not None:
+            if source != "native":
+                return None, False
+            connection.execute(
+                "DELETE FROM account_tombstones WHERE identity_hash = ?",
+                (identity_hash,),
+            )
         existing = connection.execute(
             "SELECT id, registration_status FROM accounts WHERE email = ? COLLATE NOCASE AND sso = ?",
             (email, sso),
@@ -479,21 +503,32 @@ class Database:
             ]
             return account
 
-    def delete_accounts(self, account_ids):
+    @staticmethod
+    def _delete_accounts(connection, account_ids):
         ids = list(dict.fromkeys(int(value) for value in account_ids))
         if not ids:
             return 0
         placeholders = ",".join("?" for _value in ids)
+        rows = connection.execute(
+            "SELECT email, sso FROM accounts WHERE id IN (%s)" % placeholders, ids
+        ).fetchall()
+        deleted_at = utc_now()
+        connection.executemany(
+            "INSERT OR IGNORE INTO account_tombstones (identity_hash, deleted_at) VALUES (?, ?)",
+            [(_account_identity_hash(row["email"], row["sso"]), deleted_at) for row in rows],
+        )
+        cursor = connection.execute(
+            "DELETE FROM accounts WHERE id IN (%s)" % placeholders, ids
+        )
+        return cursor.rowcount
+
+    def delete_accounts(self, account_ids):
         with self.transaction() as connection:
-            cursor = connection.execute(
-                "DELETE FROM accounts WHERE id IN (%s)" % placeholders, ids
-            )
-            return cursor.rowcount
+            return self._delete_accounts(connection, account_ids)
 
     def delete_account(self, account_id):
         with self.transaction() as connection:
-            cursor = connection.execute("DELETE FROM accounts WHERE id = ?", (int(account_id),))
-            return cursor.rowcount == 1
+            return self._delete_accounts(connection, [account_id]) == 1
 
     def export_accounts(self, account_ids=None):
         with self.connection() as connection:
