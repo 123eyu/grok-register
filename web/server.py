@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -53,6 +53,22 @@ _job_state = {
 _log_lock = threading.Lock()
 _log_seq = 0
 _logs = collections.deque(maxlen=LOG_LIMIT)
+
+_database_lock = threading.Lock()
+_database_cache = {}
+
+
+def _get_database():
+    from storage.database import Database
+
+    config = _load_config_if_idle()
+    path = str(Path(config.get("database_path") or "./data/grok-register.sqlite3").expanduser().resolve())
+    with _database_lock:
+        database = _database_cache.get(path)
+        if database is None:
+            database = Database(path)
+            _database_cache[path] = database
+        return database
 
 
 def _append_log(message: str) -> None:
@@ -389,6 +405,93 @@ def logs(after: int = Query(default=0, ge=0)):
         entries = [dict(item) for item in _logs if int(item["seq"]) > int(after)]
         latest = int(_log_seq)
     return {"ok": True, "latest": latest, "entries": entries}
+
+
+@app.get("/api/accounts")
+def list_accounts(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    search: str = Query(default=""),
+    registration_status: str = Query(default=""),
+    authorization_status: str = Query(default=""),
+    email_provider: str = Query(default=""),
+    registration_run_id: Optional[int] = Query(default=None, ge=1),
+    date_from: str = Query(default=""),
+    date_to: str = Query(default=""),
+):
+    database = _get_database()
+    result = database.list_accounts(
+        limit=limit,
+        offset=offset,
+        search=search,
+        registration_status=registration_status,
+        authorization_status=authorization_status,
+        email_provider=email_provider,
+        registration_run_id=registration_run_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return {"ok": True, **result}
+
+
+@app.get("/api/accounts/{account_id}")
+def get_account(account_id: int):
+    account = _get_database().get_account(account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    return {"ok": True, "account": account}
+
+
+@app.delete("/api/accounts/{account_id}")
+def delete_account(account_id: int, request: Request):
+    _require_local_origin(request)
+    if not _get_database().delete_account(account_id):
+        raise HTTPException(status_code=404, detail="账号不存在")
+    return {"ok": True, "deleted": True, "legacy_files_unchanged": True}
+
+
+@app.post("/api/accounts/export")
+async def export_accounts(request: Request):
+    _require_local_origin(request)
+    payload = await request.json()
+    account_ids = payload.get("ids") if isinstance(payload, dict) else None
+    if not isinstance(account_ids, list) or not account_ids:
+        raise HTTPException(status_code=400, detail="请提供非空账号 ID 列表")
+    try:
+        ids = [int(value) for value in account_ids]
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="账号 ID 必须是整数") from exc
+    if any(value < 1 for value in ids):
+        raise HTTPException(status_code=400, detail="账号 ID 必须大于零")
+    unique_ids = list(dict.fromkeys(ids))
+    rows = _get_database().export_accounts(unique_ids)
+    if len(rows) != len(unique_ids):
+        raise HTTPException(status_code=404, detail="部分账号不存在")
+    body = "".join(
+        "%s----%s----%s\n" % (row["email"], row["password"], row["sso"])
+        for row in rows
+    )
+    return Response(
+        content=body,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="accounts-export.txt"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/api/stats")
+def account_stats():
+    return {"ok": True, **_get_database().account_stats()}
+
+
+@app.get("/api/jobs/history")
+def registration_history(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    return {"ok": True, **_get_database().list_registration_runs(limit, offset)}
 
 
 @app.post("/api/start")
