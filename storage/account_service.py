@@ -29,7 +29,7 @@ def persist_account(database, output_path, account, email_provider, registration
 
 def persist_account_status(database, account_id, pools, cpa, password="", sso=""):
     def status_for_pool(name):
-        state = pools.get(name, {})
+        state = pools.get(name)
         if not isinstance(state, dict):
             return "unknown", ""
         if not state.get("enabled"):
