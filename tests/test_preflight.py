@@ -157,6 +157,17 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         self.assertEqual(checks["cpa"]["status"], "WARN")
         self.assertFalse(checks["cpa"]["required"])
 
+    def test_invalid_optional_cpa_timeout_is_a_warning(self):
+        result = preflight.run_health_checks(self.config(
+            cpa_export_enabled=True,
+            cpa_mint_timeout_sec=5,
+        ))
+        checks = self.by_key(result)
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(checks["configuration"]["status"], "OK")
+        self.assertEqual(checks["cpa"]["status"], "WARN")
+
     def test_invalid_optional_grok2api_remote_endpoint_is_a_warning(self):
         result = preflight.run_health_checks(self.config(
             cpa_export_enabled=False,
