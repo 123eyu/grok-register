@@ -145,6 +145,48 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         self.assertNotIn("public-secret", message)
         self.assertIn("[REDACTED]", message)
 
+    def test_invalid_optional_cpa_endpoint_is_a_warning(self):
+        result = preflight.run_health_checks(self.config(
+            cpa_export_enabled=True,
+            cpa_base_url="not-a-url",
+        ))
+        checks = self.by_key(result)
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(checks["configuration"]["status"], "OK")
+        self.assertEqual(checks["cpa"]["status"], "WARN")
+        self.assertFalse(checks["cpa"]["required"])
+
+    def test_invalid_optional_grok2api_remote_endpoint_is_a_warning(self):
+        result = preflight.run_health_checks(self.config(
+            cpa_export_enabled=False,
+            grok2api_auto_add_remote=True,
+            grok2api_remote_base="not-a-url",
+            grok2api_remote_app_key="app-key",
+        ))
+        check = self.by_key(result)["grok2api"]
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(check["status"], "WARN")
+        self.assertFalse(check["required"])
+
+    def test_proxy_pool_uses_any_valid_source_and_warns_for_invalid_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pool_file = Path(directory) / "proxies.txt"
+            pool_file.write_text("http://127.0.0.1:7890\n", encoding="utf-8")
+            result = preflight.run_health_checks(self.config(
+                cpa_export_enabled=False,
+                proxy_mode="pool",
+                proxy_pool_file=str(pool_file),
+                proxy_pool_subscription_url="not-a-url",
+            ))
+        check = self.by_key(result)["proxy"]
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(check["status"], "WARN")
+        self.assertTrue(check["required"])
+        self.assertIn("至少一个代理池来源可用", check["message"])
+
     def test_summary_counts_only_required_errors_as_blocking(self):
         result = preflight.run_health_checks(self.config(cpa_export_enabled=False))
         self.assertTrue(result["ok"])
