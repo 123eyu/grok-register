@@ -10,7 +10,7 @@ import sqlite3
 from filelock import FileLock
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _MIGRATIONS = {
     1: (
@@ -88,6 +88,20 @@ _MIGRATIONS = {
         "CREATE INDEX idx_registration_attempts_account_id ON registration_attempts(account_id, id)",
         "CREATE INDEX idx_account_artifacts_account_id ON account_artifacts(account_id)",
         "CREATE INDEX idx_job_runs_started_at ON job_runs(started_at DESC, id DESC)",
+    ),
+    2: (
+        "ALTER TABLE registration_runs ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0 CHECK (cancelled IN (0, 1))",
+        "ALTER TABLE registration_runs ADD COLUMN error_message TEXT NOT NULL DEFAULT ''",
+        "CREATE INDEX idx_registration_runs_started_at ON registration_runs(started_at DESC, id DESC)",
+        """CREATE TABLE legacy_imports (
+            path TEXT PRIMARY KEY,
+            file_size INTEGER NOT NULL,
+            modified_ns INTEGER NOT NULL,
+            imported_count INTEGER NOT NULL DEFAULT 0,
+            duplicate_count INTEGER NOT NULL DEFAULT 0,
+            malformed_count INTEGER NOT NULL DEFAULT 0,
+            imported_at TEXT NOT NULL
+        )""",
     ),
 }
 
@@ -250,3 +264,173 @@ class Database:
     def schema_version(self):
         with self.connection() as connection:
             return connection.execute("PRAGMA user_version").fetchone()[0]
+
+    def legacy_import_fingerprint(self, path):
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT file_size, modified_ns FROM legacy_imports WHERE path = ?",
+                (os.fspath(path),),
+            ).fetchone()
+        return None if row is None else (row["file_size"], row["modified_ns"])
+
+    def record_legacy_import(self, path, file_size, modified_ns, summary):
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO legacy_imports (
+                    path, file_size, modified_ns, imported_count, duplicate_count,
+                    malformed_count, imported_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    file_size = excluded.file_size,
+                    modified_ns = excluded.modified_ns,
+                    imported_count = excluded.imported_count,
+                    duplicate_count = excluded.duplicate_count,
+                    malformed_count = excluded.malformed_count,
+                    imported_at = excluded.imported_at""",
+                (
+                    os.fspath(path), file_size, modified_ns, summary.imported,
+                    summary.duplicates, summary.malformed, utc_now(),
+                ),
+            )
+
+    def create_registration_run(self, requested_count, config_snapshot=None):
+        started_at = utc_now()
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """INSERT INTO registration_runs
+                   (status, requested_count, config_snapshot_json, started_at)
+                   VALUES ('running', ?, ?, ?)""",
+                (int(requested_count), _json_text(config_snapshot), started_at),
+            )
+            return cursor.lastrowid
+
+    def update_registration_run(self, run_id, **updates):
+        allowed = {
+            "status", "processed_count", "success_count", "failed_count",
+            "uncertain_count", "postprocess_warning_count", "cancelled",
+            "finished_at", "error_message",
+        }
+        values = [(key, value) for key, value in updates.items() if key in allowed]
+        if not values:
+            return False
+        assignments = ", ".join("%s = ?" % key for key, _value in values)
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE registration_runs SET %s WHERE id = ?" % assignments,
+                [value for _key, value in values] + [int(run_id)],
+            )
+            return cursor.rowcount == 1
+
+    def list_registration_runs(self, limit=50, offset=0):
+        with self.connection() as connection:
+            total = connection.execute("SELECT COUNT(*) FROM registration_runs").fetchone()[0]
+            rows = connection.execute(
+                """SELECT id, status, requested_count, processed_count, success_count,
+                          failed_count, uncertain_count, postprocess_warning_count,
+                          cancelled, started_at, finished_at, error_message
+                   FROM registration_runs
+                   ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?""",
+                (int(limit), int(offset)),
+            ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": total}
+
+    def list_accounts(
+        self, limit=50, offset=0, search="", registration_status="",
+        authorization_status="", email_provider="", registration_run_id=None,
+        date_from="", date_to="",
+    ):
+        conditions = []
+        parameters = []
+        if search:
+            escaped = str(search).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append("email LIKE ? ESCAPE '\\'")
+            parameters.append("%" + escaped + "%")
+        for column, value in (
+            ("registration_status", registration_status),
+            ("authorization_status", authorization_status),
+            ("email_provider", email_provider),
+        ):
+            if value:
+                conditions.append(column + " = ?")
+                parameters.append(value)
+        if registration_run_id is not None:
+            conditions.append("registration_run_id = ?")
+            parameters.append(int(registration_run_id))
+        if date_from:
+            conditions.append("created_at >= ?")
+            parameters.append(date_from)
+        if date_to:
+            conditions.append("created_at <= ?")
+            parameters.append(date_to)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        with self.connection() as connection:
+            total = connection.execute(
+                "SELECT COUNT(*) FROM accounts" + where, parameters
+            ).fetchone()[0]
+            rows = connection.execute(
+                """SELECT id, email, email_provider, registration_status,
+                          authorization_status, source, registration_run_id,
+                          created_at, updated_at, last_authenticated_at
+                   FROM accounts""" + where + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                parameters + [int(limit), int(offset)],
+            ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": total}
+
+    def get_account(self, account_id):
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM accounts WHERE id = ?", (int(account_id),)
+            ).fetchone()
+            if row is None:
+                return None
+            account = dict(row)
+            account["profile"] = json.loads(account.pop("profile_json"))
+            account["artifacts"] = [
+                dict(item) for item in connection.execute(
+                    """SELECT id, artifact_type, path, format, created_at
+                       FROM account_artifacts WHERE account_id = ? ORDER BY id""",
+                    (int(account_id),),
+                ).fetchall()
+            ]
+            return account
+
+    def delete_account(self, account_id):
+        with self.transaction() as connection:
+            cursor = connection.execute("DELETE FROM accounts WHERE id = ?", (int(account_id),))
+            return cursor.rowcount == 1
+
+    def export_accounts(self, account_ids=None):
+        with self.connection() as connection:
+            if account_ids is None:
+                rows = connection.execute(
+                    "SELECT email, password, sso FROM accounts ORDER BY id"
+                ).fetchall()
+            else:
+                ids = [int(value) for value in account_ids]
+                if not ids:
+                    return []
+                placeholders = ",".join("?" for _value in ids)
+                rows = connection.execute(
+                    "SELECT email, password, sso FROM accounts WHERE id IN (%s) ORDER BY id" % placeholders,
+                    ids,
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def account_stats(self):
+        with self.connection() as connection:
+            total = connection.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
+            registration = connection.execute(
+                "SELECT registration_status, COUNT(*) AS count FROM accounts GROUP BY registration_status"
+            ).fetchall()
+            authorization = connection.execute(
+                "SELECT authorization_status, COUNT(*) AS count FROM accounts GROUP BY authorization_status"
+            ).fetchall()
+            providers = connection.execute(
+                "SELECT email_provider, COUNT(*) AS count FROM accounts GROUP BY email_provider"
+            ).fetchall()
+        return {
+            "total": total,
+            "by_registration_status": {row["registration_status"]: row["count"] for row in registration},
+            "by_authorization_status": {row["authorization_status"]: row["count"] for row in authorization},
+            "by_email_provider": {row["email_provider"]: row["count"] for row in providers},
+        }
