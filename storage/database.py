@@ -252,9 +252,13 @@ class Database:
             elif registration_status == "registered" and existing["registration_status"] == "pending_recovery":
                 connection.execute(
                     """UPDATE accounts
-                       SET registration_status = 'registered', source = ?, updated_at = ?
+                       SET password = ?, registration_status = 'registered',
+                           source = ?, updated_at = ?
                        WHERE id = ?""",
-                    (source, updated_at, existing["id"]),
+                    (
+                        str(record.get("password") or ""), source,
+                        updated_at, existing["id"],
+                    ),
                 )
             return existing["id"], False
 
