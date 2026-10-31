@@ -343,6 +343,13 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         self.assertFalse(cloudflare["ready"])
         self.assertEqual(self.by_key(cloudflare)["mailbox"]["status"], "ERROR")
 
+        cpa = preflight.run_health_checks(self.config(
+            cpa_export_enabled=True,
+            cpa_base_url="https://cpa.example:bad",
+        ))
+        self.assertTrue(cpa["ready"])
+        self.assertEqual(self.by_key(cpa)["cpa"]["status"], "WARN")
+
     def test_summary_counts_only_required_errors_as_blocking(self):
         result = preflight.run_health_checks(self.config(cpa_export_enabled=False))
         self.assertTrue(result["ok"])
