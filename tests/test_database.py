@@ -220,25 +220,34 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(account["grok2api_remote_error"], "remote timeout")
 
     def test_account_filters_pagination_and_date_range(self):
+        run_id = self.database.create_registration_run(2)
         first, _ = self.database.insert_account({
             "email": "first@example.com", "sso": "one",
-            "email_provider": "duckmail", "created_at": "2026-10-30T12:00:00+00:00",
+            "email_provider": "duckmail", "registration_status": "pending_recovery",
+            "created_at": "2026-10-30T12:00:00+00:00",
         })
         second, _ = self.database.insert_account({
             "email": "second@example.com", "sso": "two",
-            "email_provider": "cloudmail", "created_at": "2026-10-31T12:00:00+00:00",
+            "email_provider": "cloudmail", "registration_status": "registered",
+            "authorization_status": "authorized", "registration_run_id": run_id,
+            "created_at": "2026-10-31T12:00:00+00:00",
         })
         self.database.update_account_integration_status(
-            second, "succeeded", "", "not_requested", "", "not_requested", ""
+            second, "succeeded", "", "succeeded", "", "failed", "remote timeout"
         )
         result = self.database.list_accounts(
-            limit=1, offset=0, search="second", email_provider="cloudmail",
-            cpa_status="succeeded",
+            limit=1, offset=0, search="second", registration_status="registered",
+            authorization_status="authorized", email_provider="cloudmail",
+            registration_run_id=run_id, cpa_status="succeeded",
+            grok2api_local_status="succeeded", grok2api_remote_status="failed",
             date_from="2026-10-31T00:00:00+00:00",
             date_to="2026-10-31T23:59:59+00:00",
         )
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["items"][0]["id"], second)
+        page = self.database.list_accounts(limit=1, offset=1)
+        self.assertEqual(page["total"], 2)
+        self.assertEqual(len(page["items"]), 1)
         self.assertNotEqual(first, second)
 
     def test_bulk_delete_removes_accounts_and_related_artifacts(self):
