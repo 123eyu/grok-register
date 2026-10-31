@@ -777,6 +777,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
     from storage.account_service import persist_account, persist_account_status
     from storage.database import Database
     from storage.legacy_import import import_legacy_directory
+    from registration_diagnostics import capture_failure_screenshot
 
     provider = str(config.get("email_provider", "") or "").strip().lower()
     task_outlook_runtime = None
@@ -831,6 +832,14 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
         def record_attempt(attempt):
             database.create_registration_attempt(registration_run_id, **attempt)
 
+        def capture_failure(attempt):
+            return capture_failure_screenshot(
+                _registration_browser.page,
+                registration_run_id,
+                attempt,
+                log_callback=log_callback,
+            )
+
         def record_progress(batch, account, output):
             try:
                 database.update_registration_run(
@@ -869,6 +878,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                 max_mail_retry=3,
                 persist_account_record=persist_record,
                 persist_account_status=persist_status,
+                registration_run_id=registration_run_id,
             )
         else:
             operations = RegistrationOperations(
@@ -889,6 +899,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                 persist_account_line=lambda email, password, sso: _append_account_line(accounts_output_file, email, password, sso),
                 persist_account_record=persist_record,
                 persist_account_status=persist_status,
+                capture_failure_diagnostics=capture_failure,
                 queue_unsaved_result=lambda payload, error: _queue_unsaved_account(accounts_output_file, payload, error, log_callback),
                 add_tokens=lambda sso, email: add_token_to_grok2api_pools(sso, email=email, log_callback=log_callback),
                 export_cpa=lambda email, password, sso: maybe_export_cpa_xai_after_success(
