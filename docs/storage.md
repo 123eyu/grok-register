@@ -8,7 +8,7 @@ The storage package uses Python's built-in `sqlite3` module. It enables foreign 
 
 - `accounts`: account credentials, registration and authorization state, independent CPA and Grok2API local/remote outcomes, source, profile data, and timestamps.
 - `registration_runs`: batch-level counters (including registered-but-unsaved accounts), cancellation/error state, and a non-secret configuration snapshot.
-- `registration_attempts`: one record for each serial or parallel worker attempt, including batch slot, retry number, worker, stage, outcome, and redacted error details.
+- `registration_attempts`: one record for each serial or parallel worker attempt, including batch slot, retry number, worker, stage, outcome, failure type, redacted error details, traceback, and screenshot path.
 - `account_artifacts`: paths to related files such as legacy account exports.
 - `legacy_imports`: source file fingerprints used to avoid rescanning unchanged legacy files.
 - `account_tombstones`: one-way hashes that prevent explicitly deleted accounts from being restored by a later legacy import.
@@ -42,5 +42,8 @@ The local WebUI exposes SQLite-backed endpoints:
 - `POST /api/accounts/export`: export selected accounts in the legacy TXT format.
 - `GET /api/stats`: account status breakdowns and aggregate registration success rate.
 - `GET /api/jobs/history`: paginated registration history with success rate and attempt counts.
+- `GET /api/jobs/history/{run_id}/attempts`: paginated attempt diagnostics, including failure type, traceback, and screenshot path.
 
-Account endpoints that expose or mutate account data require same-origin local WebUI requests. Account list responses omit passwords and SSO values; account details and explicit exports are sensitive and remain local-only.
+Failed and retrying browser attempts capture a screenshot before final browser cleanup. Screenshots are stored under `data/diagnostics/registration/` with restrictive file permissions; screenshot errors are logged but never replace the original registration result. Attempts that fail before an account exists remain discoverable through the batch-attempt endpoint.
+
+Account endpoints that expose or mutate account data require same-origin local WebUI requests. Account list responses omit passwords and SSO values; account details, attempt tracebacks, screenshot paths, and explicit exports are sensitive and remain local-only.
