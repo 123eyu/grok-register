@@ -1,5 +1,7 @@
 """Coordinate primary SQLite persistence with the legacy TXT export."""
 
+import os
+
 
 def persist_account(database, output_path, account, email_provider, registration_run_id):
     account_id, inserted = database.insert_account({
@@ -18,6 +20,9 @@ def persist_account(database, output_path, account, email_provider, registration
         from account_outputs import ensure_account_line
 
         ensure_account_line(output_path, account.email, account.password, account.sso)
+        database.add_artifact(
+            account_id, "legacy_txt", os.path.realpath(os.path.abspath(output_path)), "txt"
+        )
     except Exception as exc:
         legacy_export_error = str(exc)
     return {
