@@ -98,6 +98,8 @@ def _check_proxy_config(config):
 
     mode = str(config.get("proxy_mode") or "auto").lower()
     fallback = str(config.get("proxy_fallback") or "none").lower()
+    if mode not in {"auto", "direct", "single", "pool"}:
+        return _result("proxy", "Proxy", "ERROR", True, "代理模式无效")
     required = mode in {"single", "pool"} or fallback == "single"
     proxy = str(config.get("proxy") or "").strip()
 
@@ -151,6 +153,8 @@ def _check_mailbox_config(config):
         "cloudmail": ("cloudmail_api_base", "cloudmail_public_token", "cloudmail_domains"),
         "outlook": ("outlook_accounts_file",),
     }
+    if provider not in required_fields:
+        return _result("mailbox", "Mailbox", "ERROR", True, "未知邮箱服务商: %s" % provider)
     missing = []
     if provider == "yyds":
         if not any(config.get(key) for key in required_fields[provider]):
