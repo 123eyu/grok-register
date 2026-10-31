@@ -488,7 +488,7 @@ class Database:
             account["profile"] = json.loads(account.pop("profile_json"))
             account["attempts"] = [
                 dict(item) for item in connection.execute(
-                    """SELECT id, registration_run_id, slot_index, attempt_number, worker_key,
+                    """SELECT id, registration_run_id, slot_index, account_id, attempt_number, worker_key,
                               stage, status, error_type, error_message, started_at, finished_at
                        FROM registration_attempts WHERE account_id = ? ORDER BY id DESC""",
                     (int(account_id),),
