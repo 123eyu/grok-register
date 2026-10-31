@@ -1487,8 +1487,10 @@ class GrokRegisterGUI:
         with self.operation_lock:
             if self.is_running or self.registration_starting:
                 reason = "[!] 注册任务启动或运行期间不能执行依赖检查"
-            elif self.proxy_test_running or self.health_check_running:
-                reason = "[!] 其他健康检查正在运行"
+            elif self.proxy_test_running:
+                reason = "[!] 代理池测试正在运行"
+            elif self.health_check_running:
+                reason = "[!] 依赖健康检查正在运行"
             else:
                 reason = ""
                 self.health_check_running = True
@@ -1652,8 +1654,10 @@ class GrokRegisterGUI:
         with self.operation_lock:
             if self.is_running or self.registration_starting:
                 reason = "[!] 注册任务启动或运行期间不能手动测试代理池"
-            elif self.proxy_test_running or self.health_check_running:
-                reason = "[!] 其他健康检查正在运行"
+            elif self.proxy_test_running:
+                reason = "[!] 代理池测试已在运行"
+            elif self.health_check_running:
+                reason = "[!] 依赖健康检查正在运行"
             else:
                 reason = ""
                 self.proxy_test_running = True
@@ -1708,7 +1712,9 @@ class GrokRegisterGUI:
         with self.operation_lock:
             if self.is_running or self.registration_starting:
                 reason = "[!] 当前已有任务正在启动或运行"
-            elif self.proxy_test_running or self.health_check_running:
+            elif self.proxy_test_running:
+                reason = "[!] 代理池测试进行中，暂不能启动注册"
+            elif self.health_check_running:
                 reason = "[!] 依赖检查进行中，暂不能启动注册"
             else:
                 reason = ""
