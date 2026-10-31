@@ -18,19 +18,18 @@ def capture_failure_screenshot(
     screenshot_dir=None,
 ):
     """Save a private screenshot for one failed attempt; return an empty path on failure."""
-    screenshot = getattr(page, "get_screenshot", None)
-    if not callable(screenshot):
-        return ""
-
-    directory = Path(screenshot_dir) if screenshot_dir else (
-        Path(__file__).resolve().parent / "data" / "diagnostics" / "registration"
-    )
+    path = None
     try:
+        screenshot = getattr(page, "get_screenshot", None)
+        if not callable(screenshot):
+            return ""
+
+        directory = Path(screenshot_dir) if screenshot_dir else (
+            Path(__file__).resolve().parent / "data" / "diagnostics" / "registration"
+        )
         directory.mkdir(parents=True, exist_ok=True)
-        try:
+        if os.name == "posix":
             os.chmod(directory, 0o700)
-        except OSError:
-            pass
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         worker = _filename_part(details.get("worker_key"))
@@ -42,19 +41,20 @@ def capture_failure_screenshot(
             timestamp,
         )
         path = directory / name
-        try:
-            screenshot(path=str(path), full_page=True)
-        except TypeError:
-            screenshot(path=str(path))
+        screenshot(path=str(path), full_page=True)
 
         if not path.is_file() or path.stat().st_size == 0:
             return ""
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        if os.name == "posix":
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                path.unlink(missing_ok=True)
+                raise
         return str(path.resolve())
     except Exception as exc:
+        if path is not None:
+            path.unlink(missing_ok=True)
         if log_callback:
             log_callback("[Debug] 注册失败截图未保存: %s" % type(exc).__name__)
         return ""
