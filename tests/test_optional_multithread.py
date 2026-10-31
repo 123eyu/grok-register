@@ -172,6 +172,17 @@ class OptionalMultithreadTests(unittest.TestCase):
             "_screen_registered_sso": lambda *_args, **_kwargs: None,
         }
         observed = []
+
+        def persist_record(account):
+            with persist_lock:
+                next_account_id["value"] += 1
+                account_id = next_account_id["value"]
+                persisted.append(account.email)
+            return {"account_id": account_id, "legacy_export_error": ""}
+
+        def persist_status(account_id, _pools, _cpa, _password, _sso):
+            persisted_statuses.append(account_id)
+
         callbacks = RegistrationCallbacks(
             log=lambda _message: None,
             cancelled=lambda: False,
@@ -190,16 +201,8 @@ class OptionalMultithreadTests(unittest.TestCase):
                 workers=2,
                 enable_nsfw=False,
                 cleanup_interval=0,
-                persist_account_record=lambda account: (
-                    persist_lock.acquire(),
-                    next_account_id.update(value=next_account_id["value"] + 1),
-                    persisted.append(account.email),
-                    {"account_id": next_account_id["value"], "legacy_export_error": ""},
-                    persist_lock.release(),
-                )[3],
-                persist_account_status=lambda account_id, pools, cpa, password, sso: (
-                    persisted_statuses.append(account_id)
-                ),
+                persist_account_record=persist_record,
+                persist_account_status=persist_status,
             )
 
         self.assertEqual(result.processed_count, 5)
