@@ -128,10 +128,19 @@ def _check_proxy_config(config):
             path = Path(pool_file).expanduser()
             if not path.is_absolute():
                 path = Path(__file__).resolve().parent / path
-            if path.is_file() and path.stat().st_size > 0:
+            try:
+                from proxy_protocols import parse_subscription_source
+
+                if not path.is_file() or path.stat().st_size == 0:
+                    raise ValueError("代理池文件不存在或为空")
+                parsed = parse_subscription_source(path.read_text(encoding="utf-8-sig"))
                 valid_sources += 1
-            else:
-                source_errors.append("代理池文件不存在或为空")
+                if parsed.errors:
+                    source_errors.append(
+                        "代理池文件有 %s 行无法解析" % len(parsed.errors)
+                    )
+            except Exception as exc:
+                source_errors.append(_safe_error(exc, config))
         if subscription:
             if _valid_http_url(subscription):
                 valid_sources += 1
