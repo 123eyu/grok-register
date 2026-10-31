@@ -186,7 +186,7 @@ def _check_grok2api_config(config):
 
     warnings = []
     if local_enabled:
-            configured_path = str(config.get("grok2api_local_token_file") or "").strip()
+        configured_path = str(config.get("grok2api_local_token_file") or "").strip()
         path = Path(configured_path or (Path(__file__).resolve().parent / "token.json"))
         path = path.expanduser().resolve()
         if path.exists():
