@@ -15,6 +15,15 @@ class UnifiedHealthCheckTests(unittest.TestCase):
     def by_key(self, result):
         return {item["key"]: item for item in result["checks"]}
 
+    def test_unexpected_static_check_errors_are_reported_without_aborting(self):
+        with patch.object(preflight, "_check_browser_runtime", side_effect=OSError("runtime inspect failed")):
+            result = preflight.run_health_checks(self.config(cpa_export_enabled=False))
+
+        browser = self.by_key(result)["browser"]
+        self.assertFalse(result["ready"])
+        self.assertEqual(browser["status"], "ERROR")
+        self.assertIn("runtime inspect failed", browser["message"])
+
     def test_static_checks_do_not_run_network_or_browser_probes(self):
         with patch.object(preflight, "_check_browser_connection", side_effect=AssertionError), \
              patch.object(preflight, "_check_proxy_connection", side_effect=AssertionError), \
