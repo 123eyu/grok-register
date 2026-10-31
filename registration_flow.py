@@ -263,9 +263,12 @@ def persist_account_result(result, callbacks, ops):
         persist_record = getattr(ops, "persist_account_record", None)
         if callable(persist_record):
             persistence = persist_record(result)
-            if isinstance(persistence, dict):
-                account_id = persistence.get("account_id")
-                legacy_export_error = str(persistence.get("legacy_export_error") or "")
+            if not isinstance(persistence, dict):
+                raise TypeError("persist_account_record must return a mapping")
+            account_id = persistence.get("account_id")
+            if type(account_id) is not int or account_id < 1:
+                raise ValueError("persist_account_record must return a positive account_id")
+            legacy_export_error = str(persistence.get("legacy_export_error") or "")
         else:
             ops.persist_account_line(result.email, result.password, result.sso)
         saved = True
