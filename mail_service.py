@@ -208,7 +208,7 @@ def _body_value_text(value, html=False):
     if not isinstance(value, str) or not value.strip():
         return ""
     html = html or bool(re.search(
-        r"(?is)<(?:html|head|body|style|script|div|p|br|table|span|a|ul|ol)\\b",
+        r"(?is)<(?:html|head|body|style|script|div|p|br|table|span|a|ul|ol)\b",
         value,
     ))
     return _html_to_text(value) if html else value
