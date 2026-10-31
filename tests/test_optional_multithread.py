@@ -225,6 +225,12 @@ class OptionalMultithreadTests(unittest.TestCase):
         from registration_flow import RegistrationCallbacks
         from registration_parallel import run_parallel_batch
 
+        class Cancelled(Exception):
+            pass
+
+        class RetryNeeded(Exception):
+            pass
+
         class FakeMail:
             _OWN_NAMES = set()
 
@@ -298,8 +304,8 @@ class OptionalMultithreadTests(unittest.TestCase):
                 "ok": False, "skipped": True, "reason": "disabled",
             },
             "sleep_with_cancel": lambda _seconds, _cancel: None,
-            "RegistrationCancelled": RuntimeError,
-            "AccountRetryNeeded": RuntimeError,
+            "RegistrationCancelled": Cancelled,
+            "AccountRetryNeeded": RetryNeeded,
             "_screen_registered_sso": lambda *_args, **_kwargs: None,
         }
         callbacks = RegistrationCallbacks(log=lambda _message: None, cancelled=lambda: False)
