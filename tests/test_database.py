@@ -125,5 +125,115 @@ class DatabaseTests(unittest.TestCase):
             self.database.add_artifact(999, "legacy_txt", "/tmp/a.txt", "txt")
 
 
+    def test_registration_attempts_and_run_success_rate(self):
+        run_id = self.database.create_registration_run(2, {"email_provider": "duckmail"})
+        self.database.create_registration_attempt(
+            run_id,
+            slot_index=1,
+            attempt_number=1,
+            worker_key="worker-1",
+            stage="browser_start",
+            status="retrying",
+            error_type="TimeoutError",
+            error_message="browser timed out",
+        )
+        self.database.create_registration_attempt(
+            run_id,
+            slot_index=1,
+            attempt_number=2,
+            worker_key="worker-1",
+            stage="postprocess",
+            status="succeeded",
+        )
+        self.database.update_registration_run(
+            run_id, status="completed", processed_count=2, success_count=1,
+            failed_count=1, finished_at="2026-10-31T10:00:00+00:00",
+        )
+        history = self.database.list_registration_runs()
+        row = history["items"][0]
+        self.assertEqual(row["attempt_count"], 2)
+        self.assertEqual(row["success_rate"], 50.0)
+
+    def test_integration_statuses_are_independent(self):
+        account_id, _ = self.database.insert_account({
+            "email": "integration@example.com", "sso": "token",
+        })
+        self.database.update_account_integration_status(
+            account_id,
+            "warning", "CPA copied with warning",
+            "succeeded", "",
+            "failed", "remote timeout",
+        )
+        account = self.database.get_account(account_id)
+        self.assertEqual(account["registration_status"], "registered")
+        self.assertEqual(account["authorization_status"], "unknown")
+        self.assertEqual(account["cpa_status"], "warning")
+        self.assertEqual(account["grok2api_local_status"], "succeeded")
+        self.assertEqual(account["grok2api_remote_status"], "failed")
+        self.assertEqual(account["grok2api_remote_error"], "remote timeout")
+
+    def test_account_filters_pagination_and_date_range(self):
+        first, _ = self.database.insert_account({
+            "email": "first@example.com", "sso": "one",
+            "email_provider": "duckmail", "created_at": "2026-10-30T12:00:00+00:00",
+        })
+        second, _ = self.database.insert_account({
+            "email": "second@example.com", "sso": "two",
+            "email_provider": "cloudmail", "created_at": "2026-10-31T12:00:00+00:00",
+        })
+        self.database.update_account_integration_status(
+            second, "succeeded", "", "not_requested", "", "not_requested", ""
+        )
+        result = self.database.list_accounts(
+            limit=1, offset=0, search="second", email_provider="cloudmail",
+            cpa_status="succeeded",
+            date_from="2026-10-31T00:00:00+00:00",
+            date_to="2026-10-31T23:59:59+00:00",
+        )
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["items"][0]["id"], second)
+        self.assertNotEqual(first, second)
+
+    def test_bulk_delete_removes_accounts_and_related_artifacts(self):
+        first, _ = self.database.insert_account({"email": "one@example.com", "sso": "one"})
+        second, _ = self.database.insert_account({"email": "two@example.com", "sso": "two"})
+        self.database.add_artifact(first, "legacy_txt", "/tmp/accounts.txt", "txt")
+        self.assertEqual(self.database.delete_accounts([first, second, first]), 2)
+        self.assertEqual(self.database.account_count(), 0)
+        with self.database.connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM account_artifacts").fetchone()[0], 0)
+
+    def test_account_stats_include_integration_status_and_overall_success_rate(self):
+        self.database.insert_account({"email": "one@example.com", "sso": "one"})
+        run_id = self.database.create_registration_run(2)
+        self.database.update_registration_run(
+            run_id, processed_count=2, success_count=1, failed_count=1,
+        )
+        stats = self.database.account_stats()
+        self.assertEqual(stats["total"], 1)
+        self.assertEqual(stats["by_cpa_status"], {"not_requested": 1})
+        self.assertEqual(stats["by_grok2api_local_status"], {"not_requested": 1})
+        self.assertEqual(stats["success_rate"], 50.0)
+        self.assertEqual(stats["attempt_count"], 0)
+
+    def test_native_duplicate_refreshes_latest_batch_metadata(self):
+        account_id, _ = self.database.insert_account({
+            "email": "same@example.com", "password": "old", "sso": "token",
+            "source": "legacy_txt", "email_provider": "",
+        })
+        run_id = self.database.create_registration_run(1)
+        duplicate_id, inserted = self.database.insert_account({
+            "email": "same@example.com", "password": "new", "sso": "token",
+            "source": "native", "email_provider": "duckmail",
+            "registration_run_id": run_id,
+        })
+        self.assertFalse(inserted)
+        self.assertEqual(duplicate_id, account_id)
+        account = self.database.get_account(account_id)
+        self.assertEqual(account["password"], "new")
+        self.assertEqual(account["email_provider"], "duckmail")
+        self.assertEqual(account["registration_run_id"], run_id)
+
+
 if __name__ == "__main__":
     unittest.main()
