@@ -467,7 +467,10 @@ def list_accounts(
         grok2api_local_status=grok2api_local_status,
         grok2api_remote_status=grok2api_remote_status,
     )
-    return {"ok": True, **result, "limit": limit, "offset": offset}
+    return JSONResponse(
+        content={"ok": True, **result, "limit": limit, "offset": offset},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.delete("/api/accounts")
@@ -490,7 +493,10 @@ def get_account(account_id: int, request: Request):
     account = _get_database().get_account(account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="账号不存在")
-    return {"ok": True, "account": account}
+    return JSONResponse(
+        content={"ok": True, "account": account},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.delete("/api/accounts/{account_id}")
@@ -532,7 +538,10 @@ async def export_accounts(request: Request):
 @app.get("/api/stats")
 def account_stats(request: Request):
     _require_local_origin(request)
-    return {"ok": True, **_get_database().account_stats()}
+    return JSONResponse(
+        content={"ok": True, **_get_database().account_stats()},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/jobs/history")
@@ -542,7 +551,13 @@ def registration_history(
     offset: int = Query(default=0, ge=0),
 ):
     _require_local_origin(request)
-    return {"ok": True, **_get_database().list_registration_runs(limit, offset), "limit": limit, "offset": offset}
+    return JSONResponse(
+        content={
+            "ok": True, **_get_database().list_registration_runs(limit, offset),
+            "limit": limit, "offset": offset,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/start")
