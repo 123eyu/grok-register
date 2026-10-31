@@ -786,6 +786,9 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
 
     try:
         database = Database(config.get("database_path") or "./data/grok-register.sqlite3")
+        diagnostics_dir = os.path.join(
+            os.path.dirname(os.path.abspath(database.path)), "diagnostics", "registration"
+        )
         snapshot_keys = (
             "proxy_mode", "multi_thread_enabled", "multi_thread_workers", "enable_nsfw",
             "email_provider", "proxy_pool_endpoint_mode",
@@ -838,6 +841,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                 registration_run_id,
                 attempt,
                 log_callback=log_callback,
+                screenshot_dir=diagnostics_dir,
             )
 
         def record_progress(batch, account, output):
@@ -879,6 +883,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                 persist_account_record=persist_record,
                 persist_account_status=persist_status,
                 registration_run_id=registration_run_id,
+                diagnostics_dir=diagnostics_dir,
             )
         else:
             operations = RegistrationOperations(
