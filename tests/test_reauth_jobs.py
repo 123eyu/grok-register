@@ -158,6 +158,61 @@ class ReauthenticationJobTests(unittest.TestCase):
             "other@example.com----other-pass----other-session",
         ])
 
+    def test_job_history_survives_new_database_connection(self):
+        job = self._run()
+        reopened = Database(self.database.path)
+        persisted = reopened.get_job(job["id"])
+        self.assertEqual(persisted["success_count"], 1)
+        self.assertEqual(persisted["items"][0]["status"], "succeeded")
+
+    def test_legacy_export_falls_back_to_dedicated_output_file(self):
+        account_id, _ = self.database.insert_account({
+            "email": "no-artifact@example.com",
+            "password": "pw", "sso": "old",
+        })
+        result = self._run(account_ids=[account_id])
+        self.assertEqual(result["success_count"], 1)
+        self.assertEqual(
+            (self.root / "accounts_reauthenticated.txt").read_text(encoding="utf-8"),
+            "no-artifact@example.com----pw----new-session\n",
+        )
+
+    def test_new_session_collision_does_not_overwrite_existing_authorization(self):
+        other, _ = self.database.insert_account({
+            "email": "user@example.com", "password": "pw2", "sso": "occupied-session",
+        })
+        result = self._run(login=lambda *_args, **_kwargs: "occupied-session")
+        self.assertEqual(result["failed_count"], 1)
+        self.assertEqual(result["items"][0]["status"], "failed")
+        self.assertEqual(self.database.get_account(self.account_id)["sso"], "old-session")
+        self.assertEqual(self.database.get_account(other)["sso"], "occupied-session")
+
+    def test_second_start_is_rejected_while_first_job_is_active(self):
+        entered = threading.Event()
+        resume = threading.Event()
+
+        def login(_email, _password, cancelled, **_kwargs):
+            entered.set()
+            resume.wait(timeout=3)
+            return "new-session"
+
+        manager = ReauthManager(
+            self.database, login,
+            lambda *_args, **_kwargs: (
+                "not_requested", "", "not_requested", "", "not_requested", "",
+            ),
+            self.root,
+        )
+        job_id = manager.start([self.account_id])
+        self.assertTrue(entered.wait(timeout=3))
+        try:
+            with self.assertRaises(RuntimeError):
+                manager.start([self.account_id])
+        finally:
+            resume.set()
+            manager._thread.join(timeout=3)
+        self.assertEqual(self.database.get_job(job_id)["status"], "completed")
+
     def test_two_accounts_with_same_email_are_tracked_by_account_id(self):
         second, _ = self.database.insert_account({
             "email": "user@example.com", "password": "pw2", "sso": "different-token",
