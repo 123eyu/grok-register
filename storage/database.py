@@ -383,8 +383,8 @@ class Database:
 
     def create_registration_attempt(
         self, registration_run_id, slot_index, attempt_number, worker_key, stage, status,
-        account_id=None, error_type="", error_message="", traceback="",
-        failure_type="", screenshot_path="", started_at=None, finished_at=None,
+        account_id=None, error_type="", error_message="", started_at=None,
+        finished_at=None, traceback="", failure_type="", screenshot_path="",
     ):
         with self.transaction() as connection:
             cursor = connection.execute(
