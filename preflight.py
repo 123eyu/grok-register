@@ -306,8 +306,8 @@ def _check_proxy_connection(config, log_callback=None):
         from proxy_pool import get_manager
 
         safe_log = (
-            lambda message: log_callback(_safe_error(message, config))
-            if log_callback else lambda _message: None
+            (lambda message: log_callback(_safe_error(message, config)))
+            if log_callback else (lambda _message: None)
         )
         manager = get_manager(config=config, log=safe_log)
         manager.reload_sources(force=True)
