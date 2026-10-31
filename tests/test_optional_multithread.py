@@ -291,8 +291,8 @@ class OptionalMultithreadTests(unittest.TestCase):
                 modules[worker_id] = module
             return module
 
-        def capture(page, run_id, details, log_callback=None):
-            captured.append((page, run_id, details))
+        def capture(page, run_id, details, log_callback=None, screenshot_dir=None):
+            captured.append((page, run_id, details, screenshot_dir))
             return "/tmp/worker-%s.png" % page.worker_id
 
         runtime_namespace = {
@@ -328,16 +328,18 @@ class OptionalMultithreadTests(unittest.TestCase):
                     enable_nsfw=False,
                     cleanup_interval=0,
                     registration_run_id=77,
+                    diagnostics_dir="/tmp/grok-register-diagnostics",
                 )
 
         self.assertTrue(captured)
         self.assertTrue(any(
             page is modules[page.worker_id].page and run_id == 77
-            for page, run_id, _details in captured
+            for page, run_id, _details, _directory in captured
         ))
         self.assertTrue(any(
             page.worker_id == 1 and details["stage"] == "page_open"
-            for page, _run_id, details in captured
+            and directory == "/tmp/grok-register-diagnostics"
+            for page, _run_id, details, directory in captured
         ))
 
 
