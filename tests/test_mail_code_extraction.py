@@ -234,6 +234,58 @@ class VerificationCodeExtractionTests(unittest.TestCase):
                 "ABC-123",
             )
 
+    def test_duckmail_uses_detail_subject_when_list_subject_is_generic(self):
+        with patch.object(mail_service, "raise_if_cancelled", return_value=None, create=True), patch.object(
+            mail_service, "get_messages", return_value=[{
+                "id": "mail-1",
+                "subject": "New message",
+                "to": [{"address": "target@example.com"}],
+            }]
+        ), patch.object(
+            mail_service, "get_message_detail", return_value={"subject": "ABC-123 xAI"}
+        ):
+            self.assertEqual(
+                mail_service.duckmail_get_oai_code(
+                    "unused", "target@example.com", timeout=1, poll_interval=0
+                ),
+                "ABC-123",
+            )
+
+    def test_cloudflare_and_yyds_use_detail_subjects(self):
+        with patch.object(mail_service, "get_cloudflare_api_base", return_value="https://mail.example"), patch.object(
+            mail_service, "cloudflare_get_messages", return_value=[{
+                "id": "mail-1",
+                "subject": "New message",
+                "to": [{"address": "target@example.com"}],
+            }]
+        ), patch.object(
+            mail_service, "cloudflare_get_message_detail", return_value={"subject": "Confirmation code: ABC-123"}
+        ), patch.object(
+            mail_service, "raise_if_cancelled", return_value=None, create=True
+        ):
+            self.assertEqual(
+                mail_service.cloudflare_get_oai_code(
+                    "unused", "target@example.com", timeout=1, poll_interval=0
+                ),
+                "ABC-123",
+            )
+
+        with patch.object(mail_service, "raise_if_cancelled", return_value=None, create=True), patch.object(
+            mail_service, "yyds_get_messages", return_value=[{
+                "id": "mail-1",
+                "subject": "New message",
+                "to": [{"address": "target@example.com"}],
+            }]
+        ), patch.object(
+            mail_service, "yyds_get_message_detail", return_value={"subject": "ABC-123 xAI"}
+        ):
+            self.assertEqual(
+                mail_service.yyds_get_oai_code(
+                    "unused", "target@example.com", timeout=1, poll_interval=0
+                ),
+                "ABC-123",
+            )
+
     def test_duckmail_extracts_code_from_raw_mime_message(self):
         message = EmailMessage()
         message["Subject"] = Header("Confirmation code: ABC-123", "utf-8").encode()
