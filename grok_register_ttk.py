@@ -793,7 +793,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
         registration_run_id = database.create_registration_run(max(1, int(count)), config_snapshot)
 
         imported_files = import_legacy_directory(
-            database, os.path.dirname(os.path.abspath(accounts_output_file)), provider
+            database, os.path.dirname(os.path.abspath(accounts_output_file)), ""
         )
         for path, summary in imported_files:
             log_callback(
