@@ -198,6 +198,21 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         self.assertTrue(check["required"])
         self.assertIn("至少一个代理池来源可用", check["message"])
 
+    def test_safe_error_redacts_proxy_and_endpoint_credentials(self):
+        config = self.config(
+            proxy="http://user:proxy-secret@127.0.0.1:7890",
+            grok2api_remote_base="https://remote.example/api?token=remote-secret",
+        )
+        message = preflight._safe_error(
+            RuntimeError(
+                "proxy http://user:proxy-secret@127.0.0.1:7890 "
+                "remote https://remote.example/api?token=remote-secret"
+            ),
+            config,
+        )
+        self.assertNotIn("proxy-secret", message)
+        self.assertNotIn("remote-secret", message)
+
     def test_summary_counts_only_required_errors_as_blocking(self):
         result = preflight.run_health_checks(self.config(cpa_export_enabled=False))
         self.assertTrue(result["ok"])
