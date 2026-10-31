@@ -46,15 +46,14 @@ def capture_failure_screenshot(
         if not path.is_file() or path.stat().st_size == 0:
             return ""
         if os.name == "posix":
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                path.unlink(missing_ok=True)
-                raise
+            os.chmod(path, 0o600)
         return str(path.resolve())
     except Exception as exc:
         if path is not None:
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
         if log_callback:
             log_callback("[Debug] 注册失败截图未保存: %s" % type(exc).__name__)
         return ""
