@@ -32,6 +32,23 @@ class DatabaseTests(unittest.TestCase):
             "account_artifacts", "job_runs",
         }.issubset(tables))
 
+    def test_migrates_pr01_v1_database_to_latest_schema(self):
+        path = Path(self.temp_dir.name) / "legacy-v1.sqlite3"
+        connection = sqlite3.connect(path)
+        for statement in _MIGRATIONS[1]:
+            connection.execute(statement)
+        connection.execute("PRAGMA user_version = 1")
+        connection.commit()
+        connection.close()
+
+        migrated = Database(path)
+        self.assertEqual(migrated.schema_version(), SCHEMA_VERSION)
+        with migrated.connection() as connection:
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(registration_runs)")
+            }
+        self.assertIn("registered_unsaved_count", columns)
+
     def test_migrates_existing_v2_database_to_latest_schema(self):
         path = Path(self.temp_dir.name) / "legacy-v2.sqlite3"
         connection = sqlite3.connect(path)
@@ -175,12 +192,14 @@ class DatabaseTests(unittest.TestCase):
         )
         self.database.update_registration_run(
             run_id, status="completed", processed_count=2, success_count=1,
-            failed_count=1, finished_at="2026-10-31T10:00:00+00:00",
+            failed_count=1, registered_unsaved_count=1,
+            finished_at="2026-10-31T10:00:00+00:00",
         )
         history = self.database.list_registration_runs()
         row = history["items"][0]
         self.assertEqual(row["attempt_count"], 2)
         self.assertEqual(row["success_rate"], 50.0)
+        self.assertEqual(row["registered_unsaved_count"], 1)
 
     def test_integration_statuses_are_independent(self):
         account_id, _ = self.database.insert_account({
@@ -236,12 +255,14 @@ class DatabaseTests(unittest.TestCase):
         run_id = self.database.create_registration_run(2)
         self.database.update_registration_run(
             run_id, processed_count=2, success_count=1, failed_count=1,
+            registered_unsaved_count=1,
         )
         stats = self.database.account_stats()
         self.assertEqual(stats["total"], 1)
         self.assertEqual(stats["by_cpa_status"], {"not_requested": 1})
         self.assertEqual(stats["by_grok2api_local_status"], {"not_requested": 1})
         self.assertEqual(stats["success_rate"], 50.0)
+        self.assertEqual(stats["registered_unsaved_count"], 1)
         self.assertEqual(stats["attempt_count"], 0)
 
     def test_native_duplicate_refreshes_latest_batch_metadata(self):
