@@ -91,6 +91,32 @@ class ReauthenticationWebTests(unittest.TestCase):
         with self.server._job_lock:
             self.server._job_state["running"] = False
 
+    def test_account_deletion_is_blocked_during_reauthentication(self):
+        with self.server._job_lock:
+            self.server._maintenance_state = "account_reauthentication"
+        try:
+            single = self.client.delete("/api/accounts/%s" % self.account_id)
+            bulk = self.client.request(
+                "DELETE", "/api/accounts", json={"ids": [self.account_id]}
+            )
+        finally:
+            with self.server._job_lock:
+                self.server._maintenance_state = None
+        self.assertEqual(single.status_code, 409)
+        self.assertEqual(bulk.status_code, 409)
+        self.assertIsNotNone(self.database.get_account(self.account_id))
+
+    def test_stop_endpoint_forwards_to_active_manager(self):
+        from unittest.mock import Mock
+
+        fake_manager = Mock()
+        fake_manager.stop.return_value = True
+        self.server._reauth_manager = fake_manager
+        result = self.client.post("/api/reauth/stop")
+        self.assertEqual(result.status_code, 200)
+        self.assertTrue(result.json()["stopped"])
+        fake_manager.stop.assert_called_once_with()
+
     def test_missing_account_is_rejected_and_maintenance_is_released(self):
         with patch.object(self.server, "_get_database", return_value=self.database), \
              patch.object(self.server.engine, "load_config"):
