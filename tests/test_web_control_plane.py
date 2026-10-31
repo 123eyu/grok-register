@@ -353,6 +353,9 @@ class WebControlPlaneTests(unittest.TestCase):
             stats = self.client.get("/api/stats")
             history = self.client.get("/api/jobs/history")
             attempts = self.client.get("/api/jobs/history/%s/attempts" % run_id)
+            attempts_page = self.client.get(
+                "/api/jobs/history/%s/attempts?limit=1&offset=1" % run_id
+            )
             missing_attempts = self.client.get("/api/jobs/history/999/attempts")
 
         self.assertEqual(listed.status_code, 200)
@@ -377,6 +380,11 @@ class WebControlPlaneTests(unittest.TestCase):
         self.assertEqual(attempts.status_code, 200)
         self.assertEqual(attempts.headers["cache-control"], "no-store")
         self.assertEqual(attempts.json()["total"], 2)
+        self.assertEqual(attempts_page.status_code, 200)
+        self.assertEqual(attempts_page.json()["total"], 2)
+        self.assertEqual(attempts_page.json()["limit"], 1)
+        self.assertEqual(attempts_page.json()["offset"], 1)
+        self.assertEqual(len(attempts_page.json()["items"]), 1)
         diagnostic = next(item for item in attempts.json()["items"] if item["failure_type"])
         self.assertEqual(diagnostic["failure_type"], "browser")
         self.assertEqual(diagnostic["screenshot_path"], "/private/failure.png")
