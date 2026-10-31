@@ -37,6 +37,16 @@ class VerificationCodeExtractionTests(unittest.TestCase):
             "ABC-123",
         )
 
+    def test_legacy_numeric_contexts_remain_supported(self):
+        self.assertEqual(
+            mail_service.extract_verification_code("Your code 123456"),
+            "123456",
+        )
+        self.assertEqual(
+            mail_service.extract_verification_code("Confirm code: ABC-123"),
+            "ABC-123",
+        )
+
     def test_multiple_unlabelled_candidates_are_ambiguous(self):
         self.assertIsNone(
             mail_service.extract_verification_code(
@@ -131,6 +141,17 @@ class VerificationCodeExtractionTests(unittest.TestCase):
         self.assertNotIn("CSS-123", body)
         self.assertNotIn("JS-123", body)
         self.assertNotIn("COMMENT-123", body)
+        self.assertEqual(mail_service.extract_verification_code(body), "ABC-123")
+
+    def test_html_in_content_field_is_sanitized(self):
+        body = mail_service.normalize_mail_body({
+            "content": (
+                "<html><style>.fake { content: 'CSS-123'; }</style>"
+                "<body>Your verification code is ABC-123.</body></html>"
+            )
+        })
+        self.assertIn("ABC-123", body)
+        self.assertNotIn("CSS-123", body)
         self.assertEqual(mail_service.extract_verification_code(body), "ABC-123")
 
     def test_html_only_body_removes_style_script_and_comments(self):
