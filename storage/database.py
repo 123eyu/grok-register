@@ -393,7 +393,7 @@ class Database:
                     registration_run_id, slot_index, account_id, attempt_number, worker_key,
                     stage, status, error_type, error_message, traceback, failure_type,
                     screenshot_path, started_at, finished_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     int(registration_run_id), int(slot_index), account_id, int(attempt_number),
                     str(worker_key or ""), str(stage or ""), str(status),
