@@ -305,7 +305,11 @@ def _check_proxy_connection(config, log_callback=None):
     if mode in {"single", "pool"}:
         from proxy_pool import get_manager
 
-        manager = get_manager(config=config, log=log_callback)
+        safe_log = (
+            lambda message: log_callback(_safe_error(message, config))
+            if log_callback else lambda _message: None
+        )
+        manager = get_manager(config=config, log=safe_log)
         manager.reload_sources(force=True)
         results = manager.probe_all(force=True)
         healthy = sum(1 for item in results if item.get("status") == "healthy")
