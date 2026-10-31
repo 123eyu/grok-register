@@ -781,73 +781,62 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
     provider = str(config.get("email_provider", "") or "").strip().lower()
     effective_count = resolve_registration_count(count, log_callback=log_callback)
     task_outlook_runtime = None
-    if provider == "outlook":
-        from outlook_mailbox_pool import create_outlook_task_runtime
-        task_outlook_runtime = create_outlook_task_runtime(
-            config.get("outlook_accounts_file", ""),
-            log_callback=log_callback,
-            cancelled_exception=RegistrationCancelled,
-        )
-        globals()["outlook_runtime"] = task_outlook_runtime
-        effective_count = min(effective_count, task_outlook_runtime.count)
-        _bind_mail_service()
-    elif provider == "cloudmail":
-        _bind_mail_service()
-        _mail_service.cloudmail_preflight(log_callback=log_callback)
+    database = None
+    registration_run_id = None
 
-    database = Database(config.get("database_path", "./data/grok-register.sqlite3"))
-    imported_files = import_legacy_directory(
-        database, os.path.dirname(os.path.abspath(accounts_output_file)), provider
-    )
-    for path, summary in imported_files:
-        log_callback(
-            "[*] 旧版账号文件导入: %s | 新增 %s | 重复 %s | 格式错误 %s"
-            % (os.path.basename(path), summary.imported, summary.duplicates, summary.malformed)
-        )
-
-    snapshot_keys = (
-        "proxy_mode", "multi_thread_enabled", "multi_thread_workers", "enable_nsfw",
-        "email_provider", "proxy_pool_endpoint_mode",
-    )
-    config_snapshot = {key: config.get(key) for key in snapshot_keys}
-    registration_run_id = database.create_registration_run(effective_count, config_snapshot)
-
-    def persist_record(account):
-        return persist_account(
-            database, accounts_output_file, account, provider, registration_run_id
-        )
-
-    def record_progress(batch, account, output):
-        try:
-            database.update_registration_run(
-                registration_run_id,
-                processed_count=batch.processed_count,
-                success_count=batch.success_count,
-                failed_count=batch.fail_count,
-                uncertain_count=batch.uncertain_count,
-                postprocess_warning_count=batch.postprocess_warning_count,
-                cancelled=bool(batch.cancelled),
-            )
-        except Exception as exc:
-            log_callback("[!] 注册任务统计写入 SQLite 失败: %s" % exc)
-        observer(batch, account, output)
-
-    def finish_run(batch):
-        database.update_registration_run(
-            registration_run_id,
-            status="cancelled" if batch.cancelled else "completed",
-            processed_count=batch.processed_count,
-            success_count=batch.success_count,
-            failed_count=batch.fail_count,
-            uncertain_count=batch.uncertain_count,
-            postprocess_warning_count=batch.postprocess_warning_count,
-            cancelled=bool(batch.cancelled),
-            finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        )
-        return batch
-
-    callbacks = RegistrationCallbacks(log=log_callback, cancelled=cancel_callback)
     try:
+        if provider == "outlook":
+            from outlook_mailbox_pool import create_outlook_task_runtime
+            task_outlook_runtime = create_outlook_task_runtime(
+                config.get("outlook_accounts_file", ""),
+                log_callback=log_callback,
+                cancelled_exception=RegistrationCancelled,
+            )
+            globals()["outlook_runtime"] = task_outlook_runtime
+            effective_count = min(effective_count, task_outlook_runtime.count)
+            _bind_mail_service()
+        elif provider == "cloudmail":
+            _bind_mail_service()
+            _mail_service.cloudmail_preflight(log_callback=log_callback)
+
+        database = Database(config.get("database_path", "./data/grok-register.sqlite3"))
+        imported_files = import_legacy_directory(
+            database, os.path.dirname(os.path.abspath(accounts_output_file)), provider
+        )
+        for path, summary in imported_files:
+            log_callback(
+                "[*] 旧版账号文件导入: %s | 新增 %s | 重复 %s | 格式错误 %s"
+                % (os.path.basename(path), summary.imported, summary.duplicates, summary.malformed)
+            )
+
+        snapshot_keys = (
+            "proxy_mode", "multi_thread_enabled", "multi_thread_workers", "enable_nsfw",
+            "email_provider", "proxy_pool_endpoint_mode",
+        )
+        config_snapshot = {key: config.get(key) for key in snapshot_keys}
+        registration_run_id = database.create_registration_run(effective_count, config_snapshot)
+
+        def persist_record(account):
+            return persist_account(
+                database, accounts_output_file, account, provider, registration_run_id
+            )
+
+        def record_progress(batch, account, output):
+            try:
+                database.update_registration_run(
+                    registration_run_id,
+                    processed_count=batch.processed_count,
+                    success_count=batch.success_count,
+                    failed_count=batch.fail_count,
+                    uncertain_count=batch.uncertain_count,
+                    postprocess_warning_count=batch.postprocess_warning_count,
+                    cancelled=bool(batch.cancelled),
+                )
+            except Exception as exc:
+                log_callback("[!] 注册任务统计写入 SQLite 失败: %s" % exc)
+            observer(batch, account, output)
+
+        callbacks = RegistrationCallbacks(log=log_callback, cancelled=cancel_callback)
         parallel_enabled = bool(config.get("multi_thread_enabled", False))
         parallel_workers = int(config.get("multi_thread_workers", 4) or 4)
         if parallel_enabled and parallel_workers > 1 and effective_count > 1:
@@ -865,59 +854,74 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                 max_mail_retry=3,
                 persist_account_record=persist_record,
             )
-            return finish_run(batch)
+        else:
+            operations = RegistrationOperations(
+                start_browser=lambda: start_browser(log_callback=log_callback),
+                restart_browser=lambda: restart_browser(log_callback=log_callback),
+                browser_missing=lambda: _registration_browser.browser is None,
+                open_signup_page=lambda: open_signup_page(log_callback=log_callback, cancel_callback=cancel_callback),
+                fill_email_and_submit=lambda: fill_email_and_submit(
+                    log_callback=log_callback,
+                    cancel_callback=cancel_callback,
+                    on_mail_created=lambda email, token: _save_mail_credential(email, token, log_callback),
+                ),
+                save_mail_credential=lambda email, token: _save_mail_credential(email, token, log_callback),
+                fill_code_and_submit=lambda email, token: fill_code_and_submit(email, token, log_callback=log_callback, cancel_callback=cancel_callback),
+                fill_profile_and_submit=lambda: fill_profile_and_submit(log_callback=log_callback, cancel_callback=cancel_callback),
+                wait_for_sso_cookie=lambda: wait_for_sso_cookie(log_callback=log_callback, cancel_callback=cancel_callback),
+                enable_nsfw=lambda sso: enable_nsfw_for_token(sso, log_callback=log_callback),
+                persist_account_line=lambda email, password, sso: _append_account_line(accounts_output_file, email, password, sso),
+                persist_account_record=persist_record,
+                queue_unsaved_result=lambda payload, error: _queue_unsaved_account(accounts_output_file, payload, error, log_callback),
+                add_tokens=lambda sso, email: add_token_to_grok2api_pools(sso, email=email, log_callback=log_callback),
+                export_cpa=lambda email, password, sso: maybe_export_cpa_xai_after_success(
+                    email=email, password=password, sso=sso,
+                    log_callback=log_callback, cancel_callback=cancel_callback,
+                ),
+                cleanup=lambda reason: cleanup_runtime_memory(log_callback=log_callback, reason=reason),
+                sleep=lambda seconds: sleep_with_cancel(seconds, cancel_callback),
+                cancelled_exception=RegistrationCancelled,
+                retry_exception=AccountRetryNeeded,
+                internal_stage_markers=True,
+                screen_sso=lambda sso, email: _screen_registered_sso(sso, email, log_callback),
+            )
+            batch = run_batch(
+                count=effective_count,
+                callbacks=callbacks,
+                observer=record_progress,
+                ops=operations,
+                enable_nsfw=bool(config.get("enable_nsfw", True)),
+                cleanup_interval=MEMORY_CLEANUP_INTERVAL,
+                max_slot_retry=3,
+                max_mail_retry=3,
+            )
 
-        operations = RegistrationOperations(
-            start_browser=lambda: start_browser(log_callback=log_callback),
-            restart_browser=lambda: restart_browser(log_callback=log_callback),
-            browser_missing=lambda: _registration_browser.browser is None,
-            open_signup_page=lambda: open_signup_page(log_callback=log_callback, cancel_callback=cancel_callback),
-            fill_email_and_submit=lambda: fill_email_and_submit(
-                log_callback=log_callback,
-                cancel_callback=cancel_callback,
-                on_mail_created=lambda email, token: _save_mail_credential(email, token, log_callback),
-            ),
-            save_mail_credential=lambda email, token: _save_mail_credential(email, token, log_callback),
-            fill_code_and_submit=lambda email, token: fill_code_and_submit(email, token, log_callback=log_callback, cancel_callback=cancel_callback),
-            fill_profile_and_submit=lambda: fill_profile_and_submit(log_callback=log_callback, cancel_callback=cancel_callback),
-            wait_for_sso_cookie=lambda: wait_for_sso_cookie(log_callback=log_callback, cancel_callback=cancel_callback),
-            enable_nsfw=lambda sso: enable_nsfw_for_token(sso, log_callback=log_callback),
-            persist_account_line=lambda email, password, sso: _append_account_line(accounts_output_file, email, password, sso),
-            persist_account_record=persist_record,
-            queue_unsaved_result=lambda payload, error: _queue_unsaved_account(accounts_output_file, payload, error, log_callback),
-            add_tokens=lambda sso, email: add_token_to_grok2api_pools(sso, email=email, log_callback=log_callback),
-            export_cpa=lambda email, password, sso: maybe_export_cpa_xai_after_success(
-                email=email, password=password, sso=sso,
-                log_callback=log_callback, cancel_callback=cancel_callback,
-            ),
-            cleanup=lambda reason: cleanup_runtime_memory(log_callback=log_callback, reason=reason),
-            sleep=lambda seconds: sleep_with_cancel(seconds, cancel_callback),
-            cancelled_exception=RegistrationCancelled,
-            retry_exception=AccountRetryNeeded,
-            internal_stage_markers=True,
-            screen_sso=lambda sso, email: _screen_registered_sso(sso, email, log_callback),
-        )
-        batch = run_batch(
-            count=effective_count,
-            callbacks=callbacks,
-            observer=record_progress,
-            ops=operations,
-            enable_nsfw=bool(config.get("enable_nsfw", True)),
-            cleanup_interval=MEMORY_CLEANUP_INTERVAL,
-            max_slot_retry=3,
-            max_mail_retry=3,
-        )
-        return finish_run(batch)
-    except Exception as exc:
         try:
             database.update_registration_run(
                 registration_run_id,
-                status="failed",
+                status="cancelled" if batch.cancelled else "completed",
+                processed_count=batch.processed_count,
+                success_count=batch.success_count,
+                failed_count=batch.fail_count,
+                uncertain_count=batch.uncertain_count,
+                postprocess_warning_count=batch.postprocess_warning_count,
+                cancelled=bool(batch.cancelled),
                 finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                error_message=str(exc),
             )
-        except Exception as persist_exc:
-            log_callback("[!] 注册任务异常状态写入 SQLite 失败: %s" % persist_exc)
+        except Exception as exc:
+            log_callback("[!] 注册任务完成状态写入 SQLite 失败: %s" % exc)
+        return batch
+    except Exception as exc:
+        if database is not None and registration_run_id is not None:
+            try:
+                database.update_registration_run(
+                    registration_run_id,
+                    status="failed",
+                    finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    error_message=str(exc),
+                )
+            except Exception as persist_exc:
+                log_callback("[!] 注册任务异常状态写入 SQLite 失败: %s" % persist_exc)
         raise
     finally:
         if task_outlook_runtime is not None:
