@@ -513,6 +513,8 @@ async def export_accounts(request: Request):
     account_ids = payload.get("ids") if isinstance(payload, dict) else None
     if not isinstance(account_ids, list) or not account_ids:
         raise HTTPException(status_code=400, detail="请提供非空账号 ID 列表")
+    if any(isinstance(value, bool) for value in account_ids):
+        raise HTTPException(status_code=400, detail="账号 ID 必须是正整数")
     try:
         ids = [int(value) for value in account_ids]
     except (TypeError, ValueError) as exc:
