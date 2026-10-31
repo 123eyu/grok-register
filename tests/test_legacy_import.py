@@ -128,5 +128,25 @@ class LegacyImportTests(unittest.TestCase):
         self.assertEqual(third[0][1].imported, 1)
         self.assertEqual(self.database.account_count(), 2)
 
+    def test_deleted_account_is_not_restored_from_unchanged_legacy_source(self):
+        path = Path(self.temp_dir.name) / "accounts.txt"
+        path.write_text("deleted@example.com----pw----token\n", encoding="utf-8")
+        first = import_legacy_accounts(self.database, path)
+        self.assertEqual(first.imported, 1)
+        with self.database.connection() as connection:
+            account_id = connection.execute("SELECT id FROM accounts").fetchone()[0]
+
+        self.assertTrue(self.database.delete_account(account_id))
+        restored = import_legacy_accounts(self.database, path)
+        self.assertEqual(restored.imported, 0)
+        self.assertEqual(restored.duplicates, 1)
+        self.assertEqual(self.database.account_count(), 0)
+
+        self.database.insert_account({
+            "email": "deleted@example.com", "password": "new-pw",
+            "sso": "token", "source": "native",
+        })
+        self.assertEqual(self.database.account_count(), 1)
+
 if __name__ == "__main__":
     unittest.main()
