@@ -208,6 +208,19 @@ class DatabaseTests(unittest.TestCase):
     def test_registration_attempt_list_rejects_unknown_run(self):
         self.assertIsNone(self.database.list_registration_attempts(999))
 
+    def test_registration_attempt_keeps_legacy_positional_timestamp_arguments(self):
+        run_id = self.database.create_registration_run(1)
+        self.database.create_registration_attempt(
+            run_id, 1, 1, "worker-1", "browser_start", "failed",
+            None, "RuntimeError", "browser failed",
+            "2026-10-31T12:00:00+00:00", "2026-10-31T12:00:01+00:00",
+        )
+
+        attempt = self.database.list_registration_attempts(run_id)["items"][0]
+        self.assertEqual(attempt["started_at"], "2026-10-31T12:00:00+00:00")
+        self.assertEqual(attempt["finished_at"], "2026-10-31T12:00:01+00:00")
+        self.assertEqual(attempt["traceback"], "")
+
     def test_registration_attempts_and_run_success_rate(self):
         run_id = self.database.create_registration_run(2, {"email_provider": "duckmail"})
         self.database.create_registration_attempt(
