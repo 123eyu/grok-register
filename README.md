@@ -272,6 +272,22 @@ CLI 读取 `config.json`，通过校验后提示：
 
 > CLI 只是省略 Tk GUI，注册页面仍然会使用真实 Chromium / Chrome。
 
+### 依赖健康检查
+
+可以在 GUI / WebUI 中点击“静态依赖检查”或“联网依赖检查”，也可以通过 CLI 执行：
+
+```bash
+# 离线检查配置、浏览器依赖、本地文件和可选集成
+python grok_register_ttk.py check
+
+# 用户主动触发联网检查
+python grok_register_ttk.py check --connectivity
+```
+
+健康检查覆盖 Configuration、Browser Runtime、Proxy、Mailbox、CPA 和 Grok2API。必需依赖失败会显示 `Result: Needs attention`；CPA、Grok2API 等可选集成异常只显示 `WARN`，不会阻断整体 `Ready` 结果。静态检查不会联网；联网检查不会启动注册、创建邮箱或执行 CPA OAuth 授权。健康检查不会自动插入注册流程。
+
+详细说明见[依赖健康检查文档](docs/health-check.md)。
+
 ## 配置说明
 
 项目启动时做结构校验，真正开始任务时再检查当前启用功能所需字段，因此可以先打开 GUI / WebUI 再逐步配置。
