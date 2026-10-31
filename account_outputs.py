@@ -30,17 +30,47 @@ def append_account_line(path, email, password, sso):
 
 
 def ensure_account_line(path, email, password, sso):
-    """Write the legacy export only when this email/SSO pair is not present."""
+    """Keep the legacy export in sync for an existing email/SSO identity."""
     path = _normalize_output_path(path)
     key = (str(email).strip().casefold(), str(sso).strip())
     with FileLock(path + ".lock", timeout=30):
-        existing = {
-            (saved_email.casefold(), saved_sso)
-            for saved_email, saved_sso in _existing_account_keys(path)
-        }
-        if key in existing:
-            return False
-        _append_account_line_unlocked(path, email, password, sso)
+        if not os.path.isfile(path):
+            _append_account_line_unlocked(path, email, password, sso)
+            return True
+
+        with open(path, "r", encoding="utf-8", newline="") as handle:
+            lines = handle.readlines()
+
+        updated = False
+        for index, line in enumerate(lines):
+            parts = line.rstrip("\r\n").split("----", 2)
+            if len(parts) != 3:
+                continue
+            if (parts[0].strip().casefold(), parts[2].strip()) != key:
+                continue
+            if parts[1] == str(password):
+                return False
+            newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+            lines[index] = "%s----%s----%s%s" % (email, password, sso, newline)
+            updated = True
+
+        if not updated:
+            _append_account_line_unlocked(path, email, password, sso)
+            return True
+
+        fd, temporary_path = tempfile.mkstemp(
+            prefix=".accounts-", suffix=".tmp", dir=os.path.dirname(path) or "."
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                handle.writelines(lines)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary_path, os.stat(path).st_mode & 0o777)
+            os.replace(temporary_path, path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.unlink(temporary_path)
         return True
 
 
