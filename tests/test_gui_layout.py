@@ -84,6 +84,8 @@ def test_small_window_keeps_actions_status_and_log_visible(root, scaling):
     for widget in (
         gui.start_btn,
         gui.stop_btn,
+        gui.health_check_btn,
+        gui.health_connectivity_btn,
         gui.status_label,
         gui.log_text,
     ):

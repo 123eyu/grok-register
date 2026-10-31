@@ -272,6 +272,26 @@ Enter `start` to begin. Press `Ctrl+C` to request a stop.
 
 > The CLI only omits the Tk GUI. The registration page still uses a real Chromium / Chrome browser.
 
+### Dependency health checks
+
+Run static checks without network access:
+
+```bash
+python grok_register_ttk.py check
+```
+
+Run connection checks only when explicitly requested:
+
+```bash
+python grok_register_ttk.py check --connectivity
+```
+
+The GUI and WebUI also provide **Static check** and **Connectivity check** actions. Checks cover Configuration, Browser Runtime, Proxy, Mailbox, CPA, and Grok2API. Failures in required dependencies block the Ready result; CPA and Grok2API are optional integrations and produce warnings instead.
+
+Static checks inspect local configuration, installed dependencies, and local files only. Connectivity checks are user-triggered; they do not start registration, create a mailbox, or perform CPA OAuth authorization. Health checks are not automatically run before registration.
+
+See [Dependency health checks](docs/health-check.en.md) for details.
+
 ## Configuration
 
 The project performs structural validation at startup and checks fields required by currently enabled features only when a task actually starts. This allows you to open the GUI / WebUI first and configure the project incrementally.

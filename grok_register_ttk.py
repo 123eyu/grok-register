@@ -975,6 +975,7 @@ class GrokRegisterGUI:
         self.is_running = False
         self.registration_starting = False
         self.proxy_test_running = False
+        self.health_check_running = False
         self.batch_count = 0
         self.success_count = 0
         self.fail_count = 0
@@ -1286,6 +1287,16 @@ class GrokRegisterGUI:
         self.stop_btn.pack(side=tk.LEFT, padx=5)
         self.clear_btn = tk_button(btn_frame, text="清空日志", command=self.clear_log)
         self.clear_btn.pack(side=tk.LEFT, padx=5)
+        self.health_check_btn = tk_button(
+            btn_frame, text="静态依赖检查",
+            command=lambda: self.run_dependency_check(connectivity=False),
+        )
+        self.health_check_btn.pack(side=tk.LEFT, padx=5)
+        self.health_connectivity_btn = tk_button(
+            btn_frame, text="联网依赖检查",
+            command=lambda: self.run_dependency_check(connectivity=True),
+        )
+        self.health_connectivity_btn.pack(side=tk.LEFT, padx=5)
 
         status_frame = tk.Frame(main_frame, bg=UI_BG)
         status_frame.grid(row=2, column=0, sticky=tk.EW, pady=(0, 6))
@@ -1343,24 +1354,27 @@ class GrokRegisterGUI:
                         f"成功: {event[1]} | 失败: {event[2]} | 结果不确定: {event[3]} | "
                         f"待恢复: {event[4]} | 后处理警告: {event[5]}"
                     )
-                elif kind == "running":
-                    running = bool(event[1])
+                elif kind in ("running", "proxy_test", "health_check"):
                     with self.operation_lock:
+                        running = bool(self.is_running or self.registration_starting)
                         testing = bool(self.proxy_test_running)
-                    self.start_btn.config(state=tk.DISABLED if (running or testing) else tk.NORMAL)
-                    self.proxy_test_btn.config(state=tk.DISABLED if (running or testing) else tk.NORMAL)
-                    self.stop_btn.config(state=tk.NORMAL if running else tk.DISABLED)
-                    self.status_var.set("运行中..." if running else ("测试代理池..." if testing else "就绪"))
-                    self.status_label.config(foreground="blue" if (running or testing) else "green")
-                elif kind == "proxy_test":
-                    testing = bool(event[1])
-                    with self.operation_lock:
-                        running = bool(self.is_running)
-                    self.start_btn.config(state=tk.DISABLED if (running or testing) else tk.NORMAL)
-                    self.proxy_test_btn.config(state=tk.DISABLED if (running or testing) else tk.NORMAL)
-                    if not running:
-                        self.status_var.set("测试代理池..." if testing else "就绪")
-                        self.status_label.config(foreground="blue" if testing else "green")
+                        checking = bool(self.health_check_running)
+                    busy = running or testing or checking
+                    self.start_btn.config(state=tk.DISABLED if busy else tk.NORMAL)
+                    self.proxy_test_btn.config(state=tk.DISABLED if busy else tk.NORMAL)
+                    self.health_check_btn.config(state=tk.DISABLED if busy else tk.NORMAL)
+                    self.health_connectivity_btn.config(state=tk.DISABLED if busy else tk.NORMAL)
+                    self.stop_btn.config(state=tk.NORMAL if self.is_running else tk.DISABLED)
+                    if running:
+                        status = "运行中..."
+                    elif testing:
+                        status = "测试代理池..."
+                    elif checking:
+                        status = "依赖健康检查..."
+                    else:
+                        status = "就绪"
+                    self.status_var.set(status)
+                    self.status_label.config(foreground="blue" if busy else "green")
                 elif kind == "error":
                     messagebox.showerror(event[1], event[2])
         except queue.Empty:
@@ -1420,6 +1434,115 @@ class GrokRegisterGUI:
             return
         state = tk.NORMAL if bool(self.multi_thread_var.get()) else tk.DISABLED
         self.multi_thread_workers_spinbox.config(state=state)
+
+    def _health_config_from_ui(self):
+        candidate = dict(config)
+        candidate.update({
+            "email_provider": self.email_provider_var.get().strip() or "duckmail",
+            "duckmail_api_key": self.api_key_var.get().strip(),
+            "yyds_api_key": self.yyds_api_key_var.get().strip(),
+            "yyds_jwt": self.yyds_jwt_var.get().strip(),
+            "cloudflare_api_base": self.cloudflare_api_base_var.get().strip(),
+            "cloudflare_api_key": self.cloudflare_api_key_var.get().strip(),
+            "cloudflare_auth_mode": self.cloudflare_auth_mode_var.get().strip() or "none",
+            "cloudmail_api_base": self.cloudmail_api_base_var.get().strip(),
+            "cloudmail_public_token": self.cloudmail_public_token_var.get().strip(),
+            "cloudmail_domains": self.cloudmail_domains_var.get().strip(),
+            "outlook_accounts_file": (
+                self.outlook_accounts_file_var.get().strip()
+                or "./output/mailboxes/outlook-accounts.txt"
+            ),
+            "proxy": self.proxy_var.get().strip(),
+            "proxy_mode": self.proxy_mode_var.get().strip() or "auto",
+            "proxy_fallback": self.proxy_fallback_var.get().strip() or "none",
+            "proxy_pool_file": self.proxy_pool_file_var.get().strip(),
+            "proxy_pool_subscription_url": self.proxy_subscription_var.get().strip(),
+            "proxy_pool_endpoint_mode": self.proxy_endpoint_mode_var.get().strip() or "auto",
+            "proxy_pool_max_concurrent_per_node": int(self.proxy_capacity_var.get()),
+            "proxy_protocol_backend": self.proxy_protocol_backend_var.get().strip() or "auto",
+            "proxy_singbox_path": self.proxy_singbox_path_var.get().strip(),
+            "proxy_protocol_start_timeout_sec": int(self.proxy_protocol_start_timeout_var.get()),
+            "grok2api_auto_add_local": bool(self.grok2api_local_auto_var.get()),
+            "grok2api_local_token_file": self.grok2api_local_file_var.get().strip(),
+            "grok2api_pool_name": self.grok2api_pool_name_var.get().strip() or "ssoBasic",
+            "grok2api_auto_add_remote": bool(self.grok2api_remote_auto_var.get()),
+            "grok2api_remote_base": self.grok2api_remote_base_var.get().strip(),
+            "grok2api_remote_app_key": self.grok2api_remote_key_var.get().strip(),
+            "grok2api_remote_admin_username": self.grok2api_remote_username_var.get().strip(),
+            "grok2api_remote_admin_password": self.grok2api_remote_password_var.get(),
+            "cpa_export_enabled": bool(self.cpa_export_var.get()),
+            "cpa_auth_dir": self.cpa_auth_dir_var.get().strip() or "./cpa_auths",
+        })
+        paths = [value.strip() for value in self.cloudflare_paths_var.get().split(",") if value.strip()]
+        if len(paths) >= 4:
+            candidate.update({
+                "cloudflare_path_domains": paths[0] if paths[0].startswith("/") else "/" + paths[0],
+                "cloudflare_path_accounts": paths[1] if paths[1].startswith("/") else "/" + paths[1],
+                "cloudflare_path_token": paths[2] if paths[2].startswith("/") else "/" + paths[2],
+                "cloudflare_path_messages": paths[3] if paths[3].startswith("/") else "/" + paths[3],
+            })
+        return candidate
+
+    def run_dependency_check(self, connectivity=False):
+        with self.operation_lock:
+            if self.is_running or self.registration_starting:
+                reason = "[!] 注册任务启动或运行期间不能执行依赖检查"
+            elif self.proxy_test_running:
+                reason = "[!] 代理池测试正在运行"
+            elif self.health_check_running:
+                reason = "[!] 依赖健康检查正在运行"
+            else:
+                reason = ""
+                self.health_check_running = True
+        if reason:
+            self.log(reason)
+            return
+
+        try:
+            candidate = self._health_config_from_ui()
+        except (ValueError, TypeError) as exc:
+            with self.operation_lock:
+                self.health_check_running = False
+            self.log("[!] 无法读取当前配置: %s" % exc)
+            return
+        self.ui_queue.put(("health_check", True))
+
+        def worker():
+            try:
+                from preflight import run_health_checks
+
+                result = run_health_checks(
+                    candidate, connectivity=connectivity, log_callback=self.log
+                )
+                label = "联网" if connectivity else "静态"
+                self.log("[*] %s依赖检查结果:" % label)
+                for item in result["checks"]:
+                    requirement = "必需" if item["required"] else "可选"
+                    self.log(
+                        "[%s] %s（%s）: %s"
+                        % (item["status"], item["name"], requirement, item["message"])
+                    )
+                self.log(
+                    "[*] Result: %s | errors=%s warnings=%s"
+                    % (result["result"], result["error_count"], result["warning_count"])
+                )
+            except Exception as exc:
+                self.log("[!] 依赖检查失败: %s" % exc)
+            finally:
+                with self.operation_lock:
+                    self.health_check_running = False
+                self.ui_queue.put(("health_check", False))
+
+        thread = threading.Thread(
+            target=worker, name="dependency-health-check", daemon=True
+        )
+        try:
+            thread.start()
+        except Exception:
+            with self.operation_lock:
+                self.health_check_running = False
+            self.ui_queue.put(("health_check", False))
+            raise
 
     def manage_outlook_mailbox_pool(self):
         from outlook_mailbox_pool import (
@@ -1533,6 +1656,8 @@ class GrokRegisterGUI:
                 reason = "[!] 注册任务启动或运行期间不能手动测试代理池"
             elif self.proxy_test_running:
                 reason = "[!] 代理池测试已在运行"
+            elif self.health_check_running:
+                reason = "[!] 依赖健康检查正在运行"
             else:
                 reason = ""
                 self.proxy_test_running = True
@@ -1589,6 +1714,8 @@ class GrokRegisterGUI:
                 reason = "[!] 当前已有任务正在启动或运行"
             elif self.proxy_test_running:
                 reason = "[!] 代理池测试进行中，暂不能启动注册"
+            elif self.health_check_running:
+                reason = "[!] 依赖检查进行中，暂不能启动注册"
             else:
                 reason = ""
                 self.registration_starting = True
@@ -1730,6 +1857,32 @@ def cli_log(message):
     print(f"[{timestamp}] {message}", flush=True)
 
 
+def run_health_check_cli(connectivity=False):
+    try:
+        load_config()
+    except ConfigError as exc:
+        cli_log("[ERROR] Configuration: %s" % exc)
+        cli_log("Result: Needs attention")
+        return False
+
+    from preflight import run_health_checks
+
+    result = run_health_checks(
+        dict(config), connectivity=connectivity, log_callback=cli_log
+    )
+    for item in result["checks"]:
+        requirement = "required" if item["required"] else "optional"
+        cli_log(
+            "[%s] %s (%s): %s"
+            % (item["status"], item["name"], requirement, item["message"])
+        )
+    cli_log(
+        "Result: %s | errors=%s warnings=%s"
+        % (result["result"], result["error_count"], result["warning_count"])
+    )
+    return result["ready"]
+
+
 def run_registration_cli(count):
     controller = CliStopController()
     accounts_output_file = os.path.join(
@@ -1804,6 +1957,9 @@ def main_cli():
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1].strip().lower() in ("check", "health-check"):
+        connectivity = "--connectivity" in sys.argv[2:]
+        raise SystemExit(0 if run_health_check_cli(connectivity) else 1)
     if len(sys.argv) > 1 and sys.argv[1].strip().lower() == "retry-pending":
         if len(sys.argv) < 3:
             print("用法: python grok_register_ttk.py retry-pending <pending文件> [输出文件]", file=sys.stderr)
@@ -1826,6 +1982,7 @@ def main():
     if not TK_AVAILABLE:
         print(f"[!] GUI 模式需要 Tkinter，但当前环境不可用: {TK_IMPORT_ERROR}", file=sys.stderr)
         print("[*] 可改用 CLI 模式: python grok_register_ttk.py cli", file=sys.stderr)
+        print("[*] 依赖检查: python grok_register_ttk.py check [--connectivity]", file=sys.stderr)
         return
     root = tk.Tk()
     setup_light_theme(root)
