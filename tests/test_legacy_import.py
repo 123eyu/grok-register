@@ -77,9 +77,9 @@ class LegacyImportTests(unittest.TestCase):
     def test_txt_import_promotes_a_previously_imported_pending_account(self):
         txt = Path(self.temp_dir.name) / "accounts.txt"
         pending = Path(self.temp_dir.name) / "accounts.txt.pending.jsonl"
-        record = {"email": "same@example.com", "password": "pw", "sso": "same-token"}
+        record = {"email": "same@example.com", "password": "stale-pending-pw", "sso": "same-token"}
         pending.write_text(json.dumps(record) + "\n", encoding="utf-8")
-        txt.write_text("same@example.com----pw----same-token\n", encoding="utf-8")
+        txt.write_text("same@example.com----current-txt-pw----same-token\n", encoding="utf-8")
 
         import_legacy_pending(self.database, pending)
         summary = import_legacy_accounts(self.database, txt)
@@ -89,6 +89,7 @@ class LegacyImportTests(unittest.TestCase):
             row = connection.execute("SELECT * FROM accounts").fetchone()
         self.assertEqual(row["registration_status"], "registered")
         self.assertEqual(row["source"], "legacy_txt")
+        self.assertEqual(row["password"], "current-txt-pw")
 
     def test_pending_import_does_not_duplicate_existing_txt_account(self):
         txt = Path(self.temp_dir.name) / "accounts.txt"
