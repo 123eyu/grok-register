@@ -60,6 +60,7 @@ _database_cache = {}
 
 def _get_database():
     from storage.database import Database
+    from storage.legacy_import import import_legacy_directory
 
     config = _load_config_if_idle()
     path = str(Path(config.get("database_path") or "./data/grok-register.sqlite3").expanduser().resolve())
@@ -68,7 +69,34 @@ def _get_database():
         if database is None:
             database = Database(path)
             _database_cache[path] = database
-        return database
+        imported = import_legacy_directory(database, ROOT, "")
+    for source, summary in imported:
+        _append_log(
+            "[*] 读取账号列表时导入旧文件: %s | 新增 %s | 重复 %s | 格式错误 %s"
+            % (Path(source).name, summary.imported, summary.duplicates, summary.malformed)
+        )
+    return database
+
+
+def _normalize_date_filter(value: str, end_of_day: bool = False) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        if len(raw) == 10:
+            parsed = datetime.datetime.combine(
+                datetime.date.fromisoformat(raw),
+                datetime.time.max if end_of_day else datetime.time.min,
+                tzinfo=datetime.timezone.utc,
+            )
+        else:
+            parsed = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+            parsed = parsed.astimezone(datetime.timezone.utc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="日期必须使用 ISO 8601 格式") from exc
+    return parsed.isoformat(timespec="microseconds")
 
 
 def _append_log(message: str) -> None:
@@ -409,6 +437,7 @@ def logs(after: int = Query(default=0, ge=0)):
 
 @app.get("/api/accounts")
 def list_accounts(
+    request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     search: str = Query(default=""),
@@ -418,7 +447,11 @@ def list_accounts(
     registration_run_id: Optional[int] = Query(default=None, ge=1),
     date_from: str = Query(default=""),
     date_to: str = Query(default=""),
+    cpa_status: str = Query(default=""),
+    grok2api_local_status: str = Query(default=""),
+    grok2api_remote_status: str = Query(default=""),
 ):
+    _require_local_origin(request)
     database = _get_database()
     result = database.list_accounts(
         limit=limit,
@@ -428,14 +461,37 @@ def list_accounts(
         authorization_status=authorization_status,
         email_provider=email_provider,
         registration_run_id=registration_run_id,
-        date_from=date_from,
-        date_to=date_to,
+        date_from=_normalize_date_filter(date_from),
+        date_to=_normalize_date_filter(date_to, end_of_day=True),
+        cpa_status=cpa_status,
+        grok2api_local_status=grok2api_local_status,
+        grok2api_remote_status=grok2api_remote_status,
     )
-    return {"ok": True, **result}
+    return {"ok": True, **result, "limit": limit, "offset": offset}
+
+
+@app.delete("/api/accounts")
+async def delete_accounts(request: Request):
+    _require_local_origin(request)
+    payload = await request.json()
+    account_ids = payload.get("ids") if isinstance(payload, dict) else None
+    if not isinstance(account_ids, list) or not account_ids:
+        raise HTTPException(status_code=400, detail="请提供非空账号 ID 列表")
+    if any(isinstance(value, bool) for value in account_ids):
+        raise HTTPException(status_code=400, detail="账号 ID 必须是正整数")
+    try:
+        ids = [int(value) for value in account_ids]
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="账号 ID 必须是整数") from exc
+    if any(value < 1 for value in ids):
+        raise HTTPException(status_code=400, detail="账号 ID 必须大于零")
+    deleted = _get_database().delete_accounts(ids)
+    return {"ok": True, "deleted_count": deleted, "legacy_files_unchanged": True}
 
 
 @app.get("/api/accounts/{account_id}")
-def get_account(account_id: int):
+def get_account(account_id: int, request: Request):
+    _require_local_origin(request)
     account = _get_database().get_account(account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="账号不存在")
@@ -482,16 +538,19 @@ async def export_accounts(request: Request):
 
 
 @app.get("/api/stats")
-def account_stats():
+def account_stats(request: Request):
+    _require_local_origin(request)
     return {"ok": True, **_get_database().account_stats()}
 
 
 @app.get("/api/jobs/history")
 def registration_history(
+    request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    return {"ok": True, **_get_database().list_registration_runs(limit, offset)}
+    _require_local_origin(request)
+    return {"ok": True, **_get_database().list_registration_runs(limit, offset), "limit": limit, "offset": offset}
 
 
 @app.post("/api/start")
