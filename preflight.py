@@ -93,21 +93,31 @@ def _check_proxy_config(config):
     if mode == "pool":
         pool_file = str(config.get("proxy_pool_file") or "").strip()
         subscription = str(config.get("proxy_pool_subscription_url") or "").strip()
+        source_errors = []
+        valid_sources = 0
         if pool_file:
             path = Path(pool_file).expanduser()
             if not path.is_absolute():
                 path = Path(__file__).resolve().parent / path
-            if not path.is_file() or path.stat().st_size == 0:
-                return _result("proxy", "Proxy", "ERROR", True,
-                               "代理池文件不存在或为空")
-        elif not subscription:
+            if path.is_file() and path.stat().st_size > 0:
+                valid_sources += 1
+            else:
+                source_errors.append("代理池文件不存在或为空")
+        if subscription:
+            parsed = urllib.parse.urlsplit(subscription)
+            if parsed.scheme in {"http", "https"} and parsed.netloc:
+                valid_sources += 1
+            else:
+                source_errors.append("代理池订阅地址无效")
+        if not pool_file and not subscription:
             return _result("proxy", "Proxy", "ERROR", True,
                            "代理池文件和订阅地址均未配置")
-        else:
-            parsed = urllib.parse.urlsplit(subscription)
-            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                return _result("proxy", "Proxy", "ERROR", True,
-                               "代理池订阅地址无效")
+        if not valid_sources:
+            return _result("proxy", "Proxy", "ERROR", True,
+                           "；".join(source_errors) or "没有可用的代理池来源")
+        if source_errors:
+            return _result("proxy", "Proxy", "WARN", True,
+                           "；".join(source_errors) + "；至少一个代理池来源可用")
     if mode in {"direct", "auto"} and not proxy:
         return _result("proxy", "Proxy", "OK", False,
                        "当前使用直连网络，不需要代理节点")
@@ -172,9 +182,9 @@ def _directory_writable(path):
 def _check_cpa_config(config):
     if not config.get("cpa_export_enabled"):
         return _result("cpa", "CPA", "OK", False, "CPA/OIDC 导出已关闭")
-    from cpa_export import CpaExportSettings, _load_mint_and_export
-
     try:
+        from cpa_export import CpaExportSettings, _load_mint_and_export
+
         settings = CpaExportSettings.from_config(config)
         parsed = urllib.parse.urlsplit(settings.base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
