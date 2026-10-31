@@ -40,6 +40,14 @@ def _check_configuration(config):
     validation_config = dict(config)
     validation_config["cpa_base_url"] = DEFAULT_CONFIG["cpa_base_url"]
     validation_config["grok2api_remote_base"] = ""
+    validation_config["grok2api_pool_name"] = DEFAULT_CONFIG["grok2api_pool_name"]
+    provider = str(config.get("email_provider") or "duckmail").lower()
+    if provider != "cloudflare":
+        validation_config["cloudflare_api_base"] = DEFAULT_CONFIG["cloudflare_api_base"]
+    if provider != "cloudmail":
+        validation_config["cloudmail_api_base"] = DEFAULT_CONFIG["cloudmail_api_base"]
+    if str(config.get("proxy_mode") or "auto").lower() != "pool":
+        validation_config["proxy_pool_subscription_url"] = DEFAULT_CONFIG["proxy_pool_subscription_url"]
     try:
         validate_config_structure(validation_config)
     except Exception as exc:
@@ -73,10 +81,11 @@ def _check_proxy_config(config):
     from proxy_bridge import parse_proxy_url
 
     mode = str(config.get("proxy_mode") or "auto").lower()
-    required = mode in {"single", "pool"}
+    fallback = str(config.get("proxy_fallback") or "none").lower()
+    required = mode in {"single", "pool"} or fallback == "single"
     proxy = str(config.get("proxy") or "").strip()
 
-    if mode == "single" or (mode == "auto" and proxy):
+    if mode == "single" or fallback == "single" or (mode == "auto" and proxy):
         parsed = parse_proxy_url(proxy)
         if not parsed or not parsed.hostname:
             return _result("proxy", "Proxy", "ERROR" if required else "WARN", required,
@@ -94,6 +103,11 @@ def _check_proxy_config(config):
         elif not subscription:
             return _result("proxy", "Proxy", "ERROR", True,
                            "代理池文件和订阅地址均未配置")
+        else:
+            parsed = urllib.parse.urlsplit(subscription)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                return _result("proxy", "Proxy", "ERROR", True,
+                               "代理池订阅地址无效")
     if mode in {"direct", "auto"} and not proxy:
         return _result("proxy", "Proxy", "OK", False,
                        "当前使用直连网络，不需要代理节点")
@@ -123,6 +137,12 @@ def _check_mailbox_config(config):
             "mailbox", "Mailbox", "ERROR", True,
             "邮箱服务配置缺少: " + ", ".join(missing),
         )
+    if provider in {"cloudflare", "cloudmail"}:
+        base_key = "cloudflare_api_base" if provider == "cloudflare" else "cloudmail_api_base"
+        parsed = urllib.parse.urlsplit(str(config.get(base_key) or ""))
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return _result("mailbox", "Mailbox", "ERROR", True,
+                           "%s API Base URL 无效" % provider)
     if provider == "outlook":
         try:
             from outlook_mailbox_pool import get_outlook_mailbox_pool_capacity
@@ -186,6 +206,8 @@ def _check_grok2api_config(config):
 
     warnings = []
     if local_enabled:
+        if config.get("grok2api_pool_name") not in {"ssoBasic", "ssoSuper"}:
+            warnings.append("本地 token 池名称无效")
         configured_path = str(config.get("grok2api_local_token_file") or "").strip()
         path = Path(configured_path or (Path(__file__).resolve().parent / "token.json"))
         path = path.expanduser().resolve()
@@ -203,6 +225,8 @@ def _check_grok2api_config(config):
             warnings.append("本地 token 文件所在目录不可写")
 
     if remote_enabled:
+        if config.get("grok2api_pool_name") not in {"ssoBasic", "ssoSuper"}:
+            warnings.append("远端 token 池名称无效")
         base = str(config.get("grok2api_remote_base") or "").strip()
         parsed = urllib.parse.urlsplit(base)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
