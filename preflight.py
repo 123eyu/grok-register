@@ -227,7 +227,7 @@ def _check_cpa_config(config):
     if not config.get("cpa_export_enabled"):
         return _result("cpa", "CPA", "OK", False, "CPA/OIDC 导出已关闭")
     try:
-        from cpa_export import CpaExportSettings, _load_mint_and_export
+        from cpa_export import CpaExportSettings
 
         for key, minimum, maximum in (
             ("cpa_mint_timeout_sec", 30, 1800),
@@ -240,7 +240,12 @@ def _check_cpa_config(config):
         settings = CpaExportSettings.from_config(config)
         if not _valid_http_url(settings.base_url):
             raise ValueError("CPA Base URL 无效")
-        _load_mint_and_export(settings.tools_dir)
+        tools = Path(settings.tools_dir).expanduser().resolve() if settings.tools_dir else (
+            Path(__file__).resolve().parent
+        )
+        package = tools if tools.name == "cpa_xai" else tools / "cpa_xai"
+        if not (package / "__init__.py").is_file():
+            raise ImportError("cpa_xai package not found under %s" % tools)
     except Exception as exc:
         return _result("cpa", "CPA", "WARN", False,
                        "CPA 模块不可用: " + _safe_error(exc, config))
