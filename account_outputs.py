@@ -19,9 +19,29 @@ def _append_account_line_unlocked(path, email, password, sso):
         os.fsync(handle.fileno())
 
 
+def _normalize_output_path(path):
+    return os.path.realpath(os.path.abspath(os.path.expanduser(str(path))))
+
+
 def append_account_line(path, email, password, sso):
+    path = _normalize_output_path(path)
     with FileLock(path + ".lock", timeout=30):
         _append_account_line_unlocked(path, email, password, sso)
+
+
+def ensure_account_line(path, email, password, sso):
+    """Write the legacy export only when this email/SSO pair is not present."""
+    path = _normalize_output_path(path)
+    key = (str(email).strip().casefold(), str(sso).strip())
+    with FileLock(path + ".lock", timeout=30):
+        existing = {
+            (saved_email.casefold(), saved_sso)
+            for saved_email, saved_sso in _existing_account_keys(path)
+        }
+        if key in existing:
+            return False
+        _append_account_line_unlocked(path, email, password, sso)
+        return True
 
 
 _mail_credential_cache = {}
@@ -62,6 +82,7 @@ def save_mail_credential(base_dir, email, credential):
 
 
 def queue_unsaved_account(path, payload, error):
+    path = _normalize_output_path(path)
     pending_path = path + ".pending.jsonl"
     record = dict(payload)
     record["save_error"] = str(error)
