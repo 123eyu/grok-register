@@ -3,8 +3,11 @@
 import unittest
 
 from registration_flow import (
+    RecoverablePreSubmitError,
     RegistrationCallbacks,
     RegistrationOperations,
+    RegistrationResult,
+    persist_account_result,
     run_batch,
 )
 
@@ -157,6 +160,112 @@ class RegistrationFlowTests(unittest.TestCase):
         self.assertEqual(batch.fail_count, 0)
         self.assertEqual(batch.postprocess_warning_count, 1)
 
+
+    def test_attempt_callback_records_retry_and_success(self):
+        fake = FakeOps()
+        ops = fake.operations()
+        starts = {"count": 0}
+
+        def start_browser():
+            starts["count"] += 1
+            if starts["count"] == 1:
+                raise RecoverablePreSubmitError("temporary navigation failure")
+
+        ops.start_browser = start_browser
+        attempts = []
+        callbacks = RegistrationCallbacks(
+            log=lambda _message: None,
+            cancelled=lambda: False,
+            record_attempt=attempts.append,
+        )
+        batch = run_batch(1, callbacks, lambda *args: None, ops)
+
+        self.assertEqual(batch.success_count, 1)
+        self.assertEqual([item["status"] for item in attempts], ["retrying", "succeeded"])
+        self.assertEqual([item["attempt_number"] for item in attempts], [1, 2])
+        self.assertEqual([item["slot_index"] for item in attempts], [1, 1])
+        self.assertEqual(attempts[0]["error_type"], "RecoverablePreSubmitError")
+        self.assertEqual(attempts[1]["error_type"], "")
+
+    def test_attempt_callback_records_failed_stage_without_credentials(self):
+        fake = FakeOps()
+        ops = fake.operations()
+        ops.start_browser = lambda: (_ for _ in ()).throw(RuntimeError("failed before registration"))
+        attempts = []
+        callbacks = RegistrationCallbacks(
+            log=lambda _message: None,
+            cancelled=lambda: False,
+            record_attempt=attempts.append,
+        )
+        with self.assertRaisesRegex(RuntimeError, "failed before registration"):
+            run_batch(1, callbacks, lambda *args: None, ops)
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["status"], "failed")
+        self.assertEqual(attempts[0]["stage"], "browser_start")
+
+    def test_persist_account_status_receives_independent_results(self):
+        fake = FakeOps()
+        ops = fake.operations()
+        ops.persist_account_record = lambda account: {
+            "account_id": 42,
+            "legacy_export_error": "",
+        }
+        recorded = []
+        ops.persist_account_status = lambda *args: recorded.append(args)
+        ops.add_tokens = lambda sso, email: {
+            "local": {"enabled": True, "ok": True, "error": ""},
+            "remote": {"enabled": True, "ok": False, "error": "remote failed"},
+        }
+        ops.export_cpa = lambda email, password, sso: {
+            "ok": True, "skipped": False, "warning": True,
+        }
+
+        output = persist_account_result(
+            RegistrationResult(ok=True, email="user@example.com", password="pw", sso="token"),
+            self.callbacks(),
+            ops,
+        )
+
+        self.assertEqual(output.account_id, 42)
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0][0], 42)
+        self.assertEqual(recorded[0][1]["remote"]["ok"], False)
+        self.assertTrue(recorded[0][2]["warning"])
+
+    def test_attempt_history_includes_account_persistence_failure(self):
+        fake = FakeOps()
+        ops = fake.operations()
+        ops.persist_account_record = lambda _account: (_ for _ in ()).throw(OSError("disk full"))
+        attempts = []
+        callbacks = RegistrationCallbacks(
+            log=lambda _message: None,
+            cancelled=lambda: False,
+            record_attempt=attempts.append,
+        )
+
+        batch = run_batch(1, callbacks, lambda *_args: None, ops)
+
+        self.assertEqual(batch.registered_unsaved_count, 1)
+        self.assertEqual(attempts[0]["status"], "registered_unsaved")
+        self.assertEqual(attempts[0]["error_type"], "AccountPersistenceError")
+        self.assertEqual(attempts[0]["error_message"], "disk full")
+
+    def test_partial_cpa_export_counts_as_postprocess_warning(self):
+        fake = FakeOps()
+        ops = fake.operations()
+        ops.persist_account_record = lambda _account: {
+            "account_id": 7,
+            "legacy_export_error": "",
+        }
+        ops.persist_account_status = lambda *_args: True
+        ops.export_cpa = lambda *_args: {
+            "ok": True, "skipped": False, "partial": True,
+        }
+
+        batch = run_batch(1, self.callbacks(), lambda *_args: None, ops)
+
+        self.assertEqual(batch.success_count, 1)
+        self.assertEqual(batch.postprocess_warning_count, 1)
 
 if __name__ == "__main__":
     unittest.main()

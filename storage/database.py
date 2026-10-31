@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ import sqlite3
 from filelock import FileLock
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 5
 
 _MIGRATIONS = {
     1: (
@@ -89,6 +90,41 @@ _MIGRATIONS = {
         "CREATE INDEX idx_account_artifacts_account_id ON account_artifacts(account_id)",
         "CREATE INDEX idx_job_runs_started_at ON job_runs(started_at DESC, id DESC)",
     ),
+    2: (
+        "ALTER TABLE registration_runs ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0 CHECK (cancelled IN (0, 1))",
+        "ALTER TABLE registration_runs ADD COLUMN error_message TEXT NOT NULL DEFAULT ''",
+        "CREATE INDEX idx_registration_runs_started_at ON registration_runs(started_at DESC, id DESC)",
+        """CREATE TABLE legacy_imports (
+            path TEXT PRIMARY KEY,
+            file_size INTEGER NOT NULL,
+            modified_ns INTEGER NOT NULL,
+            imported_count INTEGER NOT NULL DEFAULT 0,
+            duplicate_count INTEGER NOT NULL DEFAULT 0,
+            malformed_count INTEGER NOT NULL DEFAULT 0,
+            imported_at TEXT NOT NULL
+        )""",
+    ),
+    3: (
+        "ALTER TABLE accounts ADD COLUMN cpa_status TEXT NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE accounts ADD COLUMN cpa_error TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN grok2api_local_status TEXT NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE accounts ADD COLUMN grok2api_local_error TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN grok2api_remote_status TEXT NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE accounts ADD COLUMN grok2api_remote_error TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE registration_attempts ADD COLUMN slot_index INTEGER NOT NULL DEFAULT 0",
+        "CREATE INDEX idx_accounts_cpa_status ON accounts(cpa_status)",
+        "CREATE INDEX idx_accounts_grok2api_local_status ON accounts(grok2api_local_status)",
+        "CREATE INDEX idx_accounts_grok2api_remote_status ON accounts(grok2api_remote_status)",
+    ),
+    4: (
+        """CREATE TABLE account_tombstones (
+            identity_hash TEXT PRIMARY KEY,
+            deleted_at TEXT NOT NULL
+        )""",
+    ),
+    5: (
+        "ALTER TABLE registration_runs ADD COLUMN registered_unsaved_count INTEGER NOT NULL DEFAULT 0 CHECK (registered_unsaved_count >= 0)",
+    ),
 }
 
 
@@ -98,6 +134,11 @@ def utc_now():
 
 def _json_text(value):
     return json.dumps(value if value is not None else {}, ensure_ascii=False, separators=(",", ":"))
+
+
+def _account_identity_hash(email, sso):
+    identity = str(email).strip().casefold() + "\0" + str(sso).strip()
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 class Database:
@@ -178,17 +219,46 @@ class Database:
         profile = record.get("profile")
         registration_status = str(record.get("registration_status") or "registered")
         source = str(record.get("source") or "native")
+        identity_hash = _account_identity_hash(email, sso)
+        tombstone = connection.execute(
+            "SELECT 1 FROM account_tombstones WHERE identity_hash = ?",
+            (identity_hash,),
+        ).fetchone()
+        if tombstone is not None:
+            if source != "native":
+                return None, False
+            connection.execute(
+                "DELETE FROM account_tombstones WHERE identity_hash = ?",
+                (identity_hash,),
+            )
         existing = connection.execute(
             "SELECT id, registration_status FROM accounts WHERE email = ? COLLATE NOCASE AND sso = ?",
             (email, sso),
         ).fetchone()
         if existing is not None:
-            if registration_status == "registered" and existing["registration_status"] == "pending_recovery":
+            if source == "native":
+                connection.execute(
+                    """UPDATE accounts SET
+                        password = ?, email_provider = ?, registration_status = ?,
+                        source = 'native', profile_json = ?, registration_run_id = ?,
+                        updated_at = ?
+                    WHERE id = ?""",
+                    (
+                        str(record.get("password") or ""), str(record.get("email_provider") or ""),
+                        registration_status, _json_text(profile),
+                        record.get("registration_run_id"), updated_at, existing["id"],
+                    ),
+                )
+            elif registration_status == "registered" and existing["registration_status"] == "pending_recovery":
                 connection.execute(
                     """UPDATE accounts
-                       SET registration_status = 'registered', source = ?, updated_at = ?
+                       SET password = ?, registration_status = 'registered',
+                           source = ?, updated_at = ?
                        WHERE id = ?""",
-                    (source, updated_at, existing["id"]),
+                    (
+                        str(record.get("password") or ""), source,
+                        updated_at, existing["id"],
+                    ),
                 )
             return existing["id"], False
 
@@ -250,3 +320,277 @@ class Database:
     def schema_version(self):
         with self.connection() as connection:
             return connection.execute("PRAGMA user_version").fetchone()[0]
+
+    def legacy_import_fingerprint(self, path):
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT file_size, modified_ns FROM legacy_imports WHERE path = ?",
+                (os.fspath(path),),
+            ).fetchone()
+        return None if row is None else (row["file_size"], row["modified_ns"])
+
+    def record_legacy_import(self, path, file_size, modified_ns, summary):
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO legacy_imports (
+                    path, file_size, modified_ns, imported_count, duplicate_count,
+                    malformed_count, imported_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    file_size = excluded.file_size,
+                    modified_ns = excluded.modified_ns,
+                    imported_count = excluded.imported_count,
+                    duplicate_count = excluded.duplicate_count,
+                    malformed_count = excluded.malformed_count,
+                    imported_at = excluded.imported_at""",
+                (
+                    os.fspath(path), file_size, modified_ns, summary.imported,
+                    summary.duplicates, summary.malformed, utc_now(),
+                ),
+            )
+
+    def create_registration_run(self, requested_count, config_snapshot=None):
+        started_at = utc_now()
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """INSERT INTO registration_runs
+                   (status, requested_count, config_snapshot_json, started_at)
+                   VALUES ('running', ?, ?, ?)""",
+                (int(requested_count), _json_text(config_snapshot), started_at),
+            )
+            return cursor.lastrowid
+
+    def update_registration_run(self, run_id, **updates):
+        allowed = {
+            "status", "processed_count", "success_count", "failed_count",
+            "uncertain_count", "registered_unsaved_count", "postprocess_warning_count", "cancelled",
+            "finished_at", "error_message", "requested_count",
+        }
+        values = [(key, value) for key, value in updates.items() if key in allowed]
+        if not values:
+            return False
+        assignments = ", ".join("%s = ?" % key for key, _value in values)
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE registration_runs SET %s WHERE id = ?" % assignments,
+                [value for _key, value in values] + [int(run_id)],
+            )
+            return cursor.rowcount == 1
+
+    def create_registration_attempt(
+        self, registration_run_id, slot_index, attempt_number, worker_key, stage, status,
+        account_id=None, error_type="", error_message="", started_at=None,
+        finished_at=None,
+    ):
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """INSERT INTO registration_attempts (
+                    registration_run_id, slot_index, account_id, attempt_number, worker_key,
+                    stage, status, error_type, error_message, started_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    int(registration_run_id), int(slot_index), account_id, int(attempt_number),
+                    str(worker_key or ""), str(stage or ""), str(status),
+                    str(error_type or ""), str(error_message or "")[:500],
+                    str(started_at or utc_now()), str(finished_at or utc_now()),
+                ),
+            )
+            return cursor.lastrowid
+
+    def update_account_integration_status(
+        self, account_id, cpa_status, cpa_error,
+        grok2api_local_status, grok2api_local_error,
+        grok2api_remote_status, grok2api_remote_error,
+    ):
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """UPDATE accounts SET
+                    cpa_status = ?, cpa_error = ?,
+                    grok2api_local_status = ?, grok2api_local_error = ?,
+                    grok2api_remote_status = ?, grok2api_remote_error = ?,
+                    updated_at = ?
+                WHERE id = ?""",
+                (
+                    cpa_status, str(cpa_error or "")[:500],
+                    grok2api_local_status, str(grok2api_local_error or "")[:500],
+                    grok2api_remote_status, str(grok2api_remote_error or "")[:500],
+                    utc_now(), int(account_id),
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def list_registration_runs(self, limit=50, offset=0):
+        with self.connection() as connection:
+            total = connection.execute("SELECT COUNT(*) FROM registration_runs").fetchone()[0]
+            rows = connection.execute(
+                """SELECT id, status, requested_count, processed_count, success_count,
+                          failed_count, uncertain_count, registered_unsaved_count,
+                          postprocess_warning_count, cancelled, started_at, finished_at, error_message,
+                          CASE WHEN processed_count > 0
+                               THEN ROUND(success_count * 100.0 / processed_count, 2)
+                               ELSE 0 END AS success_rate,
+                          (SELECT COUNT(*) FROM registration_attempts a
+                           WHERE a.registration_run_id = registration_runs.id) AS attempt_count
+                   FROM registration_runs
+                   ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?""",
+                (int(limit), int(offset)),
+            ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": total}
+
+    def list_accounts(
+        self, limit=50, offset=0, search="", registration_status="",
+        authorization_status="", email_provider="", registration_run_id=None,
+        date_from="", date_to="", cpa_status="", grok2api_local_status="",
+        grok2api_remote_status="",
+    ):
+        conditions = []
+        parameters = []
+        if search:
+            escaped = str(search).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append("email LIKE ? ESCAPE '\\'")
+            parameters.append("%" + escaped + "%")
+        for column, value in (
+            ("registration_status", registration_status),
+            ("authorization_status", authorization_status),
+            ("email_provider", email_provider),
+            ("cpa_status", cpa_status),
+            ("grok2api_local_status", grok2api_local_status),
+            ("grok2api_remote_status", grok2api_remote_status),
+        ):
+            if value:
+                conditions.append(column + " = ?")
+                parameters.append(value)
+        if registration_run_id is not None:
+            conditions.append("registration_run_id = ?")
+            parameters.append(int(registration_run_id))
+        if date_from:
+            conditions.append("julianday(created_at) >= julianday(?)")
+            parameters.append(date_from)
+        if date_to:
+            conditions.append("julianday(created_at) <= julianday(?)")
+            parameters.append(date_to)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        with self.connection() as connection:
+            total = connection.execute(
+                "SELECT COUNT(*) FROM accounts" + where, parameters
+            ).fetchone()[0]
+            rows = connection.execute(
+                """SELECT id, email, email_provider, registration_status,
+                          authorization_status, cpa_status, grok2api_local_status,
+                          grok2api_remote_status, source, registration_run_id,
+                          created_at, updated_at, last_authenticated_at
+                   FROM accounts""" + where + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                parameters + [int(limit), int(offset)],
+            ).fetchall()
+        return {"items": [dict(row) for row in rows], "total": total}
+
+    def get_account(self, account_id):
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM accounts WHERE id = ?", (int(account_id),)
+            ).fetchone()
+            if row is None:
+                return None
+            account = dict(row)
+            account["profile"] = json.loads(account.pop("profile_json"))
+            account["attempts"] = [
+                dict(item) for item in connection.execute(
+                    """SELECT id, registration_run_id, slot_index, account_id, attempt_number, worker_key,
+                              stage, status, error_type, error_message, started_at, finished_at
+                       FROM registration_attempts WHERE account_id = ? ORDER BY id DESC""",
+                    (int(account_id),),
+                ).fetchall()
+            ]
+            account["artifacts"] = [
+                dict(item) for item in connection.execute(
+                    """SELECT id, artifact_type, path, format, created_at
+                       FROM account_artifacts WHERE account_id = ? ORDER BY id""",
+                    (int(account_id),),
+                ).fetchall()
+            ]
+            return account
+
+    @staticmethod
+    def _delete_accounts(connection, account_ids):
+        ids = list(dict.fromkeys(int(value) for value in account_ids))
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _value in ids)
+        rows = connection.execute(
+            "SELECT email, sso FROM accounts WHERE id IN (%s)" % placeholders, ids
+        ).fetchall()
+        deleted_at = utc_now()
+        connection.executemany(
+            "INSERT OR IGNORE INTO account_tombstones (identity_hash, deleted_at) VALUES (?, ?)",
+            [(_account_identity_hash(row["email"], row["sso"]), deleted_at) for row in rows],
+        )
+        cursor = connection.execute(
+            "DELETE FROM accounts WHERE id IN (%s)" % placeholders, ids
+        )
+        return cursor.rowcount
+
+    def delete_accounts(self, account_ids):
+        with self.transaction() as connection:
+            return self._delete_accounts(connection, account_ids)
+
+    def delete_account(self, account_id):
+        with self.transaction() as connection:
+            return self._delete_accounts(connection, [account_id]) == 1
+
+    def export_accounts(self, account_ids=None):
+        with self.connection() as connection:
+            if account_ids is None:
+                rows = connection.execute(
+                    "SELECT email, password, sso FROM accounts ORDER BY id"
+                ).fetchall()
+            else:
+                ids = [int(value) for value in account_ids]
+                if not ids:
+                    return []
+                placeholders = ",".join("?" for _value in ids)
+                rows = connection.execute(
+                    "SELECT email, password, sso FROM accounts WHERE id IN (%s) ORDER BY id" % placeholders,
+                    ids,
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def account_stats(self):
+        with self.connection() as connection:
+            total = connection.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
+            grouped = {}
+            for column in (
+                "registration_status", "authorization_status", "cpa_status",
+                "grok2api_local_status", "grok2api_remote_status", "email_provider",
+            ):
+                rows = connection.execute(
+                    "SELECT %s AS value, COUNT(*) AS count FROM accounts GROUP BY %s" % (column, column)
+                ).fetchall()
+                grouped[column] = {row["value"]: row["count"] for row in rows}
+            runs = connection.execute(
+                """SELECT COUNT(*) AS run_count,
+                          COALESCE(SUM(processed_count), 0) AS processed_count,
+                          COALESCE(SUM(success_count), 0) AS success_count,
+                          COALESCE(SUM(registered_unsaved_count), 0) AS registered_unsaved_count
+                   FROM registration_runs"""
+            ).fetchone()
+            attempts = connection.execute(
+                "SELECT COUNT(*) FROM registration_attempts"
+            ).fetchone()[0]
+        processed = int(runs["processed_count"])
+        successes = int(runs["success_count"])
+        registered_unsaved = int(runs["registered_unsaved_count"])
+        return {
+            "total": total,
+            "by_registration_status": grouped["registration_status"],
+            "by_authorization_status": grouped["authorization_status"],
+            "by_cpa_status": grouped["cpa_status"],
+            "by_grok2api_local_status": grouped["grok2api_local_status"],
+            "by_grok2api_remote_status": grouped["grok2api_remote_status"],
+            "by_email_provider": grouped["email_provider"],
+            "run_count": int(runs["run_count"]),
+            "attempt_count": attempts,
+            "processed_count": processed,
+            "success_count": successes,
+            "registered_unsaved_count": registered_unsaved,
+            "success_rate": round(successes * 100.0 / processed, 2) if processed else 0.0,
+        }

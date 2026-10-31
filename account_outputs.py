@@ -19,9 +19,63 @@ def _append_account_line_unlocked(path, email, password, sso):
         os.fsync(handle.fileno())
 
 
+def _normalize_output_path(path):
+    return os.path.realpath(os.path.abspath(os.path.expanduser(str(path))))
+
+
 def append_account_line(path, email, password, sso):
+    path = _normalize_output_path(path)
     with FileLock(path + ".lock", timeout=30):
         _append_account_line_unlocked(path, email, password, sso)
+
+
+def ensure_account_line(path, email, password, sso):
+    """Keep the legacy export in sync for an existing email/SSO identity."""
+    path = _normalize_output_path(path)
+    key = (str(email).strip().casefold(), str(sso).strip())
+    with FileLock(path + ".lock", timeout=30):
+        if not os.path.isfile(path):
+            _append_account_line_unlocked(path, email, password, sso)
+            return True
+
+        with open(path, "r", encoding="utf-8", newline="") as handle:
+            lines = handle.readlines()
+
+        found = False
+        updated = False
+        for index, line in enumerate(lines):
+            parts = line.rstrip("\r\n").split("----", 2)
+            if len(parts) != 3:
+                continue
+            if (parts[0].strip().casefold(), parts[2].strip()) != key:
+                continue
+            found = True
+            if parts[1] == str(password):
+                continue
+            newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+            lines[index] = "%s----%s----%s%s" % (email, password, sso, newline)
+            updated = True
+
+        if not found:
+            _append_account_line_unlocked(path, email, password, sso)
+            return True
+        if not updated:
+            return False
+
+        fd, temporary_path = tempfile.mkstemp(
+            prefix=".accounts-", suffix=".tmp", dir=os.path.dirname(path) or "."
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                handle.writelines(lines)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary_path, os.stat(path).st_mode & 0o777)
+            os.replace(temporary_path, path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+        return True
 
 
 _mail_credential_cache = {}
@@ -62,6 +116,7 @@ def save_mail_credential(base_dir, email, credential):
 
 
 def queue_unsaved_account(path, payload, error):
+    path = _normalize_output_path(path)
     pending_path = path + ".pending.jsonl"
     record = dict(payload)
     record["save_error"] = str(error)

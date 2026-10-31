@@ -6,21 +6,41 @@ The storage package uses Python's built-in `sqlite3` module. It enables foreign 
 
 ## Schema
 
-- `accounts`: account credentials, registration and authorization status, source, profile data, and timestamps.
-- `registration_runs`: batch-level registration counters and configuration snapshot.
-- `registration_attempts`: per-attempt stage, outcome, and diagnostic fields.
+- `accounts`: account credentials, registration and authorization state, independent CPA and Grok2API local/remote outcomes, source, profile data, and timestamps.
+- `registration_runs`: batch-level counters (including registered-but-unsaved accounts), cancellation/error state, and a non-secret configuration snapshot.
+- `registration_attempts`: one record for each serial or parallel worker attempt, including batch slot, retry number, worker, stage, outcome, and redacted error details.
 - `account_artifacts`: paths to related files such as legacy account exports.
-- `job_runs`: lifecycle records for registration and account-management jobs.
+- `legacy_imports`: source file fingerprints used to avoid rescanning unchanged legacy files.
+- `account_tombstones`: one-way hashes that prevent explicitly deleted accounts from being restored by a later legacy import.
+- `job_runs`: reserved for non-registration background jobs.
 
-An account is currently identified by the case-insensitive email address plus its exact SSO value. This preserves the identity rule used by the legacy pending recovery workflow while allowing later account operations to update a specific account row.
+An account is identified by the case-insensitive email address plus its exact SSO value. A native registration updates the account's latest registration batch and provider metadata when the same identity already exists.
 
-## Legacy import
+Registration, authorization, CPA export, and Grok2API local/remote import are separate states. A downstream failure does not change a successfully persisted account's registration status. Legacy accounts and unavailable results remain `unknown`. For new registrations, disabled integrations are recorded as `not_requested`; enabled integrations are recorded as `succeeded`, `failed`, or `warning` as appropriate.
 
-`storage.legacy_import` provides two explicit import functions:
+## Legacy compatibility
 
-- `import_legacy_accounts(database, path, email_provider="")` reads the legacy `email----password----sso` line format.
-- `import_legacy_pending(database, path, email_provider="")` reads pending JSONL records.
+The importer supports:
 
-Both imports are idempotent, report imported/duplicate/malformed record counts, and leave the source files untouched. The importer records the source file in `account_artifacts`. A normal TXT account record promotes a matching pending record to `registered`; importing a pending record never downgrades an already registered account.
+- `import_legacy_accounts(database, path, email_provider="")` for `email----password----sso` TXT files.
+- `import_legacy_pending(database, path, email_provider="")` for pending JSONL files.
+- `import_legacy_directory(database, directory, email_provider="")` for incremental directory imports.
 
-Import is intentionally explicit in this phase. The registration engine and WebUI will begin using the database in the following integration phase, after this storage layer has been independently reviewed.
+Legacy TXT and pending files remain unchanged. Files are read under the same file locks used by the legacy writers. Imports are idempotent and use file size plus nanosecond modification time to skip unchanged sources. The legacy TXT format does not encode its mailbox provider, so imported records keep an empty provider rather than inheriting the currently selected provider.
+
+The WebUI imports legacy files when the account database is first accessed; the registration engine also scans its output directory before starting a batch. Explicit account deletion writes an identity tombstone, so the same account is not silently reintroduced by a later import. A new native registration can intentionally recreate that identity.
+
+Native registration writes SQLite first and then maintains the legacy TXT export. If the TXT export fails after the SQLite commit, the account remains saved in SQLite and the export warning is recorded separately. If the SQLite write fails, the existing pending recovery path is retained.
+
+## Account APIs
+
+The local WebUI exposes SQLite-backed endpoints:
+
+- `GET /api/accounts`: paginated account list with email search, registration/authorization/CPA/Grok2API status, provider, date, and registration-batch filters.
+- `GET /api/accounts/{id}`: account details, related artifacts, and registration attempts.
+- `DELETE /api/accounts/{id}` and `DELETE /api/accounts`: single and batch deletion.
+- `POST /api/accounts/export`: export selected accounts in the legacy TXT format.
+- `GET /api/stats`: account status breakdowns and aggregate registration success rate.
+- `GET /api/jobs/history`: paginated registration history with success rate and attempt counts.
+
+Account endpoints that expose or mutate account data require same-origin local WebUI requests. Account list responses omit passwords and SSO values; account details and explicit exports are sensitive and remain local-only.
