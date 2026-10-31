@@ -784,7 +784,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
     registration_run_id = None
 
     try:
-        database = Database(config.get("database_path", "./data/grok-register.sqlite3"))
+        database = Database(config.get("database_path") or "./data/grok-register.sqlite3")
         snapshot_keys = (
             "proxy_mode", "multi_thread_enabled", "multi_thread_workers", "enable_nsfw",
             "email_provider", "proxy_pool_endpoint_mode",
