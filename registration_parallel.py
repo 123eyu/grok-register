@@ -72,7 +72,7 @@ def _aggregate(snapshots):
 
 def run_parallel_batch(count, callbacks, observer, runtime_namespace, accounts_output_file,
                        workers=4, enable_nsfw=True, cleanup_interval=5,
-                       max_slot_retry=3, max_mail_retry=3):
+                       max_slot_retry=3, max_mail_retry=3, persist_account_record=None):
     worker_counts = split_worker_counts(count, workers)
     if len(worker_counts) <= 1:
         raise ValueError("parallel batch requires at least two active workers")
@@ -206,6 +206,7 @@ def run_parallel_batch(count, callbacks, observer, runtime_namespace, accounts_o
                 sso, email, worker_log
             ),
             preflight_mail=preflight_mail,
+            persist_account_record=persist_account_record,
         )
 
         def worker_observer(batch, account, output):
