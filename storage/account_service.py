@@ -47,8 +47,8 @@ def persist_account_status(database, account_id, pools, cpa, password="", sso=""
     if not cpa or cpa.get("skipped"):
         cpa_status, cpa_error = "not_requested", ""
     elif cpa.get("ok"):
-        cpa_status = "warning" if cpa.get("warning") or cpa.get("cpa_copy_error") else "succeeded"
-        cpa_error = str(cpa.get("cpa_copy_error") or cpa.get("warning") or "")
+        cpa_status = "warning" if cpa.get("warning") or cpa.get("partial") or cpa.get("cpa_copy_error") else "succeeded"
+        cpa_error = str(cpa.get("cpa_copy_error") or cpa.get("warning") or ("partial export" if cpa.get("partial") else ""))
     else:
         cpa_status = "failed"
         cpa_error = str(cpa.get("error") or "")
