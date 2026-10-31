@@ -6,7 +6,32 @@ import threading
 
 from account_outputs import replace_account_session
 from reauthentication import LoginCancelled
-from storage.account_service import persist_account_status
+from storage.account_service import classify_integration_status
+
+
+def browser_login(email, password, cancelled, log):
+    """Run a normal login in a browser dedicated to this account."""
+    import registration_browser
+    from reauthentication import login_with_password
+
+    try:
+        _browser, page = registration_browser.start_browser(log_callback=log)
+        return login_with_password(
+            email, password, page, cancelled=cancelled, log=log
+        )
+    finally:
+        registration_browser.stop_browser()
+
+
+def refresh_integrations(email, password, sso, cancelled, log):
+    """Refresh downstream authorization artifacts after a successful login."""
+    import grok_register_ttk as engine
+
+    pools = engine.add_token_to_grok2api_pools(sso, email=email, log_callback=log)
+    cpa = engine.maybe_export_cpa_xai_after_success(
+        email, password, sso, log_callback=log, cancel_callback=cancelled
+    )
+    return classify_integration_status(pools, cpa, password, sso)
 
 
 class ReauthManager:
@@ -115,8 +140,12 @@ class ReauthManager:
                     self.database.update_job_item(job_id, account_id, "skipped")
                     self._stop.set()
                 except Exception as exc:
+                    message = str(exc)
+                    for secret in (account["password"], account["sso"]):
+                        if secret:
+                            message = message.replace(secret, "[REDACTED]")
                     self.database.update_job_item(
-                        job_id, account_id, "failed", type(exc).__name__ + ": " + str(exc)[:200]
+                        job_id, account_id, "failed", type(exc).__name__ + ": " + message[:200]
                     )
             self.database.finish_job(
                 job_id, "cancelled" if self._stop.is_set() else "completed",
