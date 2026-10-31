@@ -26,6 +26,9 @@ def _safe_error(error, config):
         "duckmail_api_key", "yyds_api_key", "yyds_jwt",
         "cloudflare_api_key", "cloudmail_public_token",
         "grok2api_remote_app_key", "grok2api_remote_admin_password",
+        "proxy", "cpa_proxy", "proxy_pool_subscription_url",
+        "cloudflare_api_base", "cloudmail_api_base",
+        "cpa_base_url", "grok2api_remote_base",
     ):
         secret = str(config.get(key) or "")
         if secret:
