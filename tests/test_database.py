@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from storage.database import Database, SCHEMA_VERSION
+from storage.database import Database, SCHEMA_VERSION, _MIGRATIONS
 
 
 class DatabaseTests(unittest.TestCase):
@@ -31,6 +31,34 @@ class DatabaseTests(unittest.TestCase):
             "accounts", "registration_runs", "registration_attempts",
             "account_artifacts", "job_runs",
         }.issubset(tables))
+
+    def test_migrates_existing_v2_database_to_latest_schema(self):
+        path = Path(self.temp_dir.name) / "legacy-v2.sqlite3"
+        connection = sqlite3.connect(path)
+        for version in (1, 2):
+            for statement in _MIGRATIONS[version]:
+                connection.execute(statement)
+            connection.execute("PRAGMA user_version = %s" % version)
+        connection.commit()
+        connection.close()
+
+        migrated = Database(path)
+        self.assertEqual(migrated.schema_version(), SCHEMA_VERSION)
+        with migrated.connection() as connection:
+            account_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(accounts)")
+            }
+            attempt_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(registration_attempts)")
+            }
+            tombstones = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'account_tombstones'"
+            ).fetchone()
+        self.assertTrue({
+            "cpa_status", "grok2api_local_status", "grok2api_remote_status",
+        }.issubset(account_columns))
+        self.assertIn("slot_index", attempt_columns)
+        self.assertIsNotNone(tombstones)
 
     def test_initialization_is_idempotent(self):
         Database(self.database_path)
