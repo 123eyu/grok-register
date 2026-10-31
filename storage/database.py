@@ -131,13 +131,14 @@ _MIGRATIONS = {
     ),
     7: (
         """CREATE TABLE job_accounts (
+            id INTEGER PRIMARY KEY,
             job_id INTEGER NOT NULL REFERENCES job_runs(id) ON DELETE CASCADE,
             account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
             email TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
             error_message TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL,
-            PRIMARY KEY (job_id, email)
+            UNIQUE (job_id, account_id)
         )""",
         "CREATE INDEX idx_job_accounts_account_id ON job_accounts(account_id)",
     ),
@@ -614,12 +615,12 @@ class Database:
             )
             return job_id
 
-    def update_job_item(self, job_id, email, status, error_message=""):
+    def update_job_item(self, job_id, account_id, status, error_message=""):
         with self.transaction() as connection:
             connection.execute(
                 """UPDATE job_accounts SET status = ?, error_message = ?, updated_at = ?
-                   WHERE job_id = ? AND email = ?""",
-                (status, str(error_message or "")[:500], utc_now(), job_id, email),
+                   WHERE job_id = ? AND account_id = ?""",
+                (status, str(error_message or "")[:500], utc_now(), job_id, account_id),
             )
             counts = connection.execute(
                 """SELECT COUNT(*) AS processed,
