@@ -11,7 +11,7 @@ import sqlite3
 from filelock import FileLock
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _MIGRATIONS = {
     1: (
@@ -121,6 +121,9 @@ _MIGRATIONS = {
             identity_hash TEXT PRIMARY KEY,
             deleted_at TEXT NOT NULL
         )""",
+    ),
+    5: (
+        "ALTER TABLE registration_runs ADD COLUMN registered_unsaved_count INTEGER NOT NULL DEFAULT 0 CHECK (registered_unsaved_count >= 0)",
     ),
 }
 
@@ -356,7 +359,7 @@ class Database:
     def update_registration_run(self, run_id, **updates):
         allowed = {
             "status", "processed_count", "success_count", "failed_count",
-            "uncertain_count", "postprocess_warning_count", "cancelled",
+            "uncertain_count", "registered_unsaved_count", "postprocess_warning_count", "cancelled",
             "finished_at", "error_message", "requested_count",
         }
         values = [(key, value) for key, value in updates.items() if key in allowed]
@@ -417,8 +420,8 @@ class Database:
             total = connection.execute("SELECT COUNT(*) FROM registration_runs").fetchone()[0]
             rows = connection.execute(
                 """SELECT id, status, requested_count, processed_count, success_count,
-                          failed_count, uncertain_count, postprocess_warning_count,
-                          cancelled, started_at, finished_at, error_message,
+                          failed_count, uncertain_count, registered_unsaved_count,
+                          postprocess_warning_count, cancelled, started_at, finished_at, error_message,
                           CASE WHEN processed_count > 0
                                THEN ROUND(success_count * 100.0 / processed_count, 2)
                                ELSE 0 END AS success_rate,
@@ -562,7 +565,8 @@ class Database:
             runs = connection.execute(
                 """SELECT COUNT(*) AS run_count,
                           COALESCE(SUM(processed_count), 0) AS processed_count,
-                          COALESCE(SUM(success_count), 0) AS success_count
+                          COALESCE(SUM(success_count), 0) AS success_count,
+                          COALESCE(SUM(registered_unsaved_count), 0) AS registered_unsaved_count
                    FROM registration_runs"""
             ).fetchone()
             attempts = connection.execute(
@@ -570,6 +574,7 @@ class Database:
             ).fetchone()[0]
         processed = int(runs["processed_count"])
         successes = int(runs["success_count"])
+        registered_unsaved = int(runs["registered_unsaved_count"])
         return {
             "total": total,
             "by_registration_status": grouped["registration_status"],
@@ -582,5 +587,6 @@ class Database:
             "attempt_count": attempts,
             "processed_count": processed,
             "success_count": successes,
+            "registered_unsaved_count": registered_unsaved,
             "success_rate": round(successes * 100.0 / processed, 2) if processed else 0.0,
         }
