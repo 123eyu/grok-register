@@ -1730,6 +1730,32 @@ def cli_log(message):
     print(f"[{timestamp}] {message}", flush=True)
 
 
+def run_health_check_cli(connectivity=False):
+    try:
+        load_config()
+    except ConfigError as exc:
+        cli_log("[ERROR] Configuration: %s" % exc)
+        cli_log("Result: Needs attention")
+        return False
+
+    from preflight import run_health_checks
+
+    result = run_health_checks(
+        dict(config), connectivity=connectivity, log_callback=cli_log
+    )
+    for item in result["checks"]:
+        requirement = "required" if item["required"] else "optional"
+        cli_log(
+            "[%s] %s (%s): %s"
+            % (item["status"], item["name"], requirement, item["message"])
+        )
+    cli_log(
+        "Result: %s | errors=%s warnings=%s"
+        % (result["result"], result["error_count"], result["warning_count"])
+    )
+    return result["ready"]
+
+
 def run_registration_cli(count):
     controller = CliStopController()
     accounts_output_file = os.path.join(
@@ -1804,6 +1830,9 @@ def main_cli():
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1].strip().lower() in ("check", "health-check"):
+        connectivity = "--connectivity" in sys.argv[2:]
+        raise SystemExit(0 if run_health_check_cli(connectivity) else 1)
     if len(sys.argv) > 1 and sys.argv[1].strip().lower() == "retry-pending":
         if len(sys.argv) < 3:
             print("用法: python grok_register_ttk.py retry-pending <pending文件> [输出文件]", file=sys.stderr)
@@ -1826,6 +1855,7 @@ def main():
     if not TK_AVAILABLE:
         print(f"[!] GUI 模式需要 Tkinter，但当前环境不可用: {TK_IMPORT_ERROR}", file=sys.stderr)
         print("[*] 可改用 CLI 模式: python grok_register_ttk.py cli", file=sys.stderr)
+        print("[*] 依赖检查: python grok_register_ttk.py check [--connectivity]", file=sys.stderr)
         return
     root = tk.Tk()
     setup_light_theme(root)
