@@ -405,13 +405,6 @@ class Database:
             )
             return cursor.lastrowid
 
-    def get_registration_run(self, run_id):
-        with self.connection() as connection:
-            row = connection.execute(
-                "SELECT * FROM registration_runs WHERE id = ?", (int(run_id),)
-            ).fetchone()
-        return None if row is None else dict(row)
-
     def list_registration_attempts(self, registration_run_id, limit=50, offset=0):
         with self.connection() as connection:
             if connection.execute(
