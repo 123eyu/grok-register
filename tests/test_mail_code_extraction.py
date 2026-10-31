@@ -130,14 +130,14 @@ class VerificationCodeExtractionTests(unittest.TestCase):
         self.assertIn("验证码", body)
         self.assertEqual(mail_service.extract_verification_code(body), "ABC-123")
 
-    def test_multipart_prefers_plain_text_and_ignores_html_style_script_and_comments(self):
+    def test_multipart_keeps_plain_and_sanitized_html_alternatives(self):
         message = EmailMessage()
         message["Subject"] = "xAI verification"
         message.set_content("Your verification code is ABC-123.")
         message.add_alternative(
             "<html><head><style>.fake { content: 'CSS-123'; }</style>"
             "<script>const code = 'JS-123';</script><!-- COMMENT-123 --></head>"
-            "<body>Your verification code is DEF-456.</body></html>",
+            "<body>Your verification code is ABC-123.</body></html>",
             subtype="html",
         )
 
