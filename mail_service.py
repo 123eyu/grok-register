@@ -191,7 +191,7 @@ def _mime_message_text(message):
             plain_parts.append(value)
         else:
             html_parts.append(_html_to_text(value))
-    return "\n".join(plain_parts or html_parts)
+    return "\n".join(plain_parts + html_parts)
 
 
 def _source_values(value):
