@@ -53,8 +53,15 @@ class VerificationCodeExtractionTests(unittest.TestCase):
 
     def test_repeated_same_candidate_is_not_ambiguous(self):
         self.assertEqual(
-            mail_service.extract_verification_code("ABC-123 appears again: ABC-123"),
+            mail_service.extract_verification_code("xAI email: ABC-123 appears again: ABC-123"),
             "ABC-123",
+        )
+
+    def test_untrusted_ticket_identifier_is_not_accepted_as_otp(self):
+        self.assertIsNone(
+            mail_service.extract_verification_code(
+                "Support ticket ABC-123 has been created."
+            )
         )
 
     def test_longer_hyphenated_code_is_not_partially_matched(self):
