@@ -32,7 +32,7 @@ def persist_account(database, output_path, account, email_provider, registration
     }
 
 
-def persist_account_status(database, account_id, pools, cpa, password="", sso=""):
+def classify_integration_status(pools, cpa, password="", sso=""):
     def status_for_pool(name):
         state = pools.get(name)
         if not isinstance(state, dict):
@@ -64,12 +64,15 @@ def persist_account_status(database, account_id, pools, cpa, password="", sso=""
 
     local_status, local_error = status_for_pool("local")
     remote_status, remote_error = status_for_pool("remote")
+    return (
+        cpa_status, cpa_error[:500],
+        local_status, local_error,
+        remote_status, remote_error,
+    )
+
+
+def persist_account_status(database, account_id, pools, cpa, password="", sso=""):
     return database.update_account_integration_status(
         account_id,
-        cpa_status,
-        cpa_error[:500],
-        local_status,
-        local_error,
-        remote_status,
-        remote_error,
+        *classify_integration_status(pools, cpa, password, sso),
     )

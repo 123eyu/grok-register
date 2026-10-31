@@ -56,6 +56,7 @@ _logs = collections.deque(maxlen=LOG_LIMIT)
 
 _database_lock = threading.Lock()
 _database_cache = {}
+_reauth_manager = None
 
 
 def _get_database():
@@ -501,9 +502,16 @@ def list_accounts(
     )
 
 
+def _require_account_edits_idle():
+    with _job_lock:
+        if _job_state["running"] or _maintenance_state is not None:
+            raise HTTPException(status_code=409, detail="任务运行期间不能删除账号")
+
+
 @app.delete("/api/accounts")
 async def delete_accounts(request: Request):
     _require_local_origin(request)
+    _require_account_edits_idle()
     payload = await request.json()
     account_ids = payload.get("ids") if isinstance(payload, dict) else None
     if not isinstance(account_ids, list) or not account_ids:
@@ -530,6 +538,7 @@ def get_account(account_id: int, request: Request):
 @app.delete("/api/accounts/{account_id}")
 def delete_account(account_id: int, request: Request):
     _require_local_origin(request)
+    _require_account_edits_idle()
     if not _get_database().delete_account(account_id):
         raise HTTPException(status_code=404, detail="账号不存在")
     return {"ok": True, "deleted": True, "legacy_files_unchanged": True}
@@ -603,6 +612,77 @@ def registration_attempt_history(
         content={"ok": True, **result, "limit": limit, "offset": offset},
         headers={"Cache-Control": "no-store"},
     )
+
+
+@app.post("/api/reauth/start")
+async def start_reauthentication(request: Request):
+    _require_local_origin(request)
+    payload = await request.json()
+    ids = payload.get("ids") if isinstance(payload, dict) else None
+    if not isinstance(ids, list) or not ids or len(ids) > 200:
+        raise HTTPException(status_code=400, detail="请选择 1-200 个账号")
+    if any(type(value) is not int or value < 1 for value in ids):
+        raise HTTPException(status_code=400, detail="账号 ID 必须是正整数")
+
+    global _reauth_manager
+    kind = "account_reauthentication"
+    _begin_maintenance(kind)
+    try:
+        engine.load_config()
+        from reauth_jobs import ReauthManager, browser_login, refresh_integrations
+
+        manager = ReauthManager(
+            _get_database(), browser_login, refresh_integrations,
+            ROOT, log=_append_log, on_finish=lambda: _end_maintenance(kind),
+        )
+        job_id = manager.start(ids)
+        _reauth_manager = manager
+        return {"ok": True, "job_id": job_id}
+    except (ValueError, LookupError, engine.ConfigError) as exc:
+        _end_maintenance(kind)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        _end_maintenance(kind)
+        raise
+
+
+@app.get("/api/reauth/status")
+def reauthentication_status(request: Request):
+    _require_local_origin(request)
+    manager = _reauth_manager
+    return JSONResponse(
+        content={"ok": True, **(manager.status() if manager else {"running": False, "job": None})},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/reauth/stop")
+def stop_reauthentication(request: Request):
+    _require_local_origin(request)
+    manager = _reauth_manager
+    return {"ok": True, "stopped": manager.stop() if manager else False}
+
+
+@app.get("/api/reauth/history")
+def reauthentication_history(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    _require_local_origin(request)
+    return JSONResponse(
+        content={"ok": True, **_get_database().list_jobs("reauthentication", limit, offset)},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/reauth/jobs/{job_id}")
+def reauthentication_job(job_id: int, request: Request):
+    _require_local_origin(request)
+    job = _get_database().get_job(job_id)
+    if job is None or job["job_type"] != "reauthentication":
+        raise HTTPException(status_code=404, detail="重新登录任务不存在")
+    return JSONResponse(content={"ok": True, "job": job}, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/start")

@@ -78,6 +78,46 @@ def ensure_account_line(path, email, password, sso):
         return True
 
 
+def replace_account_session(path, email, password, old_sso, new_sso):
+    """Atomically replace a legacy TXT account's old session without duplicating it."""
+    path = _normalize_output_path(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with FileLock(path + ".lock", timeout=30):
+        lines = []
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8", newline="") as handle:
+                lines = handle.readlines()
+        old_key = (str(email).casefold(), str(old_sso))
+        new_key = (str(email).casefold(), str(new_sso))
+        updated = []
+        found = False
+        for line in lines:
+            parts = line.rstrip("\r\n").split("----", 2)
+            key = (parts[0].strip().casefold(), parts[2].strip()) if len(parts) == 3 else None
+            if key in (old_key, new_key):
+                if not found:
+                    ending = "\r\n" if line.endswith("\r\n") else "\n"
+                    updated.append("%s----%s----%s%s" % (email, password, new_sso, ending))
+                    found = True
+            else:
+                updated.append(line)
+        if not found:
+            updated.append("%s----%s----%s\n" % (email, password, new_sso))
+
+        fd, temp_path = tempfile.mkstemp(prefix=".accounts-", suffix=".tmp", dir=os.path.dirname(path))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                handle.writelines(updated)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temp_path, os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o600)
+            os.replace(temp_path, path)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+
+
 _mail_credential_cache = {}
 _mail_credential_cache_lock = threading.Lock()
 
