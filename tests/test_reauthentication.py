@@ -72,6 +72,25 @@ class LoginPageTests(unittest.TestCase):
         self.assertEqual(token, "fresh-session")
         self.assertTrue(page.password_visible)
 
+    def test_redirect_does_not_turn_successful_login_into_failure(self):
+        class RedirectPage(Page):
+            def __init__(self):
+                super().__init__()
+                self.cookie_reads = 0
+
+            def cookies(self, all_domains=False, all_info=False):
+                self.cookie_reads += 1
+                if self.cookie_reads < 2:
+                    return []
+                return super().cookies(all_domains, all_info)
+
+            def run_js(self, _script):
+                raise RuntimeError("execution context was destroyed")
+
+        page = RedirectPage()
+        token = login_with_password("user@example.com", "password", page, timeout=2)
+        self.assertEqual(token, "fresh-session")
+
     def test_invalid_credentials_leave_no_session(self):
         with self.assertRaises(LoginRejected):
             login_with_password(
