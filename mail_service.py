@@ -474,8 +474,10 @@ def cloudflare_get_oai_code(
                     detail_subject, detail_body = normalize_mail_message(detail)
                     if detail_body:
                         combined += "\n" + detail_body
-                    if not subject:
-                        subject = detail_subject
+                    if detail_subject:
+                        combined += "\n" + detail_subject
+                        if not subject:
+                            subject = detail_subject
                 except Exception as exc:
                     if log_callback:
                         log_callback(
@@ -926,7 +928,7 @@ def duckmail_get_oai_code(
                 continue
             detail_subject, detail_body = normalize_mail_message(detail)
             combined = "\n".join(part for part in (combined, detail_body) if part)
-            subject = subject or detail_subject
+            subject = detail_subject or subject
             if log_callback:
                 log_callback(f"[Debug] 收到邮件: {subject}")
             code = extract_verification_code(combined, subject)
@@ -1353,7 +1355,7 @@ def yyds_get_oai_code(
                 continue
             detail_subject, detail_body = normalize_mail_message(detail)
             combined = "\n".join(part for part in (combined, detail_body) if part)
-            subject = subject or detail_subject
+            subject = detail_subject or subject
             if log_callback:
                 log_callback(f"[Debug] YYDS 收到邮件: {subject}")
             code = extract_verification_code(combined, subject)
