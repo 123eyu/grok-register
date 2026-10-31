@@ -5,6 +5,11 @@ import secrets
 import string
 import time
 import urllib.parse
+from email import policy
+from email.header import decode_header
+from email.message import Message
+from email.parser import BytesParser
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Tuple
 
 from curl_cffi import requests
@@ -60,24 +65,211 @@ def bind_runtime(namespace):
             globals()[name] = namespace[name]
 
 
+class _HTMLTextParser(HTMLParser):
+    _BLOCK_TAGS = {
+        "address", "article", "aside", "blockquote", "br", "dd", "div", "dl",
+        "dt", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2",
+        "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol",
+        "p", "pre", "section", "table", "td", "th", "tr", "ul",
+    }
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.suppressed = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self.suppressed.append(tag)
+        elif not self.suppressed and tag in self._BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            if tag in self.suppressed:
+                self.suppressed.remove(tag)
+        elif not self.suppressed and tag in self._BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.suppressed:
+            self.parts.append(data)
+
+    def text(self):
+        value = "".join(self.parts)
+        lines = [re.sub(r"[ \t\f\v]+", " ", line).strip() for line in value.splitlines()]
+        return "\n".join(line for line in lines if line)
+
+
+def _html_to_text(value):
+    parser = _HTMLTextParser()
+    parser.feed(str(value or ""))
+    parser.close()
+    return parser.text()
+
+
+def _decode_header_value(value):
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    raw = str(value or "")
+    if "=?" not in raw:
+        return raw
+    parts = []
+    for fragment, charset in decode_header(raw):
+        if isinstance(fragment, bytes):
+            try:
+                parts.append(fragment.decode(charset or "utf-8", errors="replace"))
+            except LookupError:
+                parts.append(fragment.decode("utf-8", errors="replace"))
+        else:
+            parts.append(fragment)
+    return "".join(parts)
+
+
+def _looks_like_rfc822(value):
+    if isinstance(value, bytes):
+        header = value[:8192].decode("ascii", errors="ignore")
+    else:
+        header = str(value or "")[:8192]
+    if "\n\n" not in header and "\r\n\r\n" not in header:
+        return False
+    header = re.split(r"\r?\n\r?\n", header, maxsplit=1)[0]
+    return bool(re.search(
+        r"(?im)^(?:from|to|cc|date|subject|mime-version|content-type|"
+        r"content-transfer-encoding|message-id):",
+        header,
+    ))
+
+
+def _parse_rfc822(value):
+    if isinstance(value, Message):
+        return value
+    if not isinstance(value, (str, bytes)) or not _looks_like_rfc822(value):
+        return None
+    raw = value if isinstance(value, bytes) else value.encode("utf-8", errors="replace")
+    return BytesParser(policy=policy.default).parsebytes(raw)
+
+
+def _decode_mime_part(part):
+    payload = part.get_payload(decode=True)
+    if payload is None:
+        payload = part.get_payload()
+        if isinstance(payload, bytes):
+            charset = part.get_content_charset() or "utf-8"
+            try:
+                return payload.decode(charset, errors="replace")
+            except LookupError:
+                return payload.decode("utf-8", errors="replace")
+        return payload if isinstance(payload, str) else ""
+
+    charset = part.get_content_charset() or "utf-8"
+    try:
+        return payload.decode(charset, errors="replace")
+    except LookupError:
+        return payload.decode("utf-8", errors="replace")
+
+
+def _mime_message_text(message):
+    plain_parts = []
+    html_parts = []
+    for part in message.walk():
+        if part.is_multipart() or part.get_content_disposition() == "attachment":
+            continue
+        content_type = part.get_content_type().lower()
+        if content_type not in ("text/plain", "text/html"):
+            continue
+        try:
+            value = _decode_mime_part(part)
+        except Exception:
+            continue
+        if not value.strip():
+            continue
+        if content_type == "text/plain":
+            plain_parts.append(value)
+        else:
+            html_parts.append(_html_to_text(value))
+    return "\n".join(plain_parts or html_parts)
+
+
+def _source_values(value):
+    if isinstance(value, (list, tuple)):
+        return value
+    return (value,)
+
+
+def _body_value_text(value, html=False):
+    if isinstance(value, dict):
+        content = value.get("content") or value.get("text") or ""
+        content_type = str(value.get("contentType") or value.get("content_type") or "").lower()
+        html = html or content_type == "html"
+        value = content
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    return _html_to_text(value) if html else value
+
+
 def normalize_mail_body(*sources):
-    """Return normalized text from provider payloads with string/list HTML support."""
+    """Normalize provider text and RFC822/MIME payloads into readable body text."""
     parts = []
     for source in sources:
+        if isinstance(source, Message):
+            value = _mime_message_text(source)
+            if value:
+                parts.append(value)
+            continue
+        if isinstance(source, (str, bytes)):
+            message = _parse_rfc822(source)
+            value = _mime_message_text(message) if message is not None else (
+                source.decode("utf-8", errors="replace") if isinstance(source, bytes) else source
+            )
+            if value.strip():
+                parts.append(value)
+            continue
         if not isinstance(source, dict):
             continue
-        for key in ("text", "raw", "content", "intro", "body", "snippet"):
-            value = source.get(key)
-            values = value if isinstance(value, (list, tuple)) else [value]
-            for item in values:
-                if isinstance(item, str) and item.strip():
-                    parts.append(item)
-        html_value = source.get("html")
-        html_items = html_value if isinstance(html_value, (list, tuple)) else [html_value]
-        for item in html_items:
-            if isinstance(item, str) and item.strip():
-                parts.append(re.sub(r"<[^>]+>", " ", item))
+
+        raw = source.get("raw")
+        message = _parse_rfc822(raw)
+        if message is not None:
+            value = _mime_message_text(message)
+            if value:
+                parts.append(value)
+
+        for key in ("text", "content", "intro", "body", "snippet"):
+            for item in _source_values(source.get(key)):
+                value = _body_value_text(item)
+                if value:
+                    parts.append(value)
+
+        for item in _source_values(source.get("html")):
+            value = _body_value_text(item, html=True)
+            if value:
+                parts.append(value)
+
+        if raw is not None and message is None:
+            for item in _source_values(raw):
+                value = _body_value_text(item)
+                if value:
+                    parts.append(value)
+
     return "\n".join(parts)
+
+
+def normalize_mail_message(*sources):
+    """Return the first decoded subject and normalized body from provider payloads."""
+    subject = ""
+    for source in sources:
+        if isinstance(source, Message):
+            subject = _decode_header_value(source.get("Subject", ""))
+        elif isinstance(source, dict):
+            subject = _decode_header_value(source.get("subject", ""))
+            if not subject:
+                message = _parse_rfc822(source.get("raw"))
+                if message is not None:
+                    subject = _decode_header_value(message.get("Subject", ""))
+        if subject:
+            break
+    return subject, normalize_mail_body(*sources)
 
 
 def _pick_list_payload(data):
