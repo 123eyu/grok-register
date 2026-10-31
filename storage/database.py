@@ -697,6 +697,9 @@ class Database:
             connection.execute(
                 """UPDATE accounts
                    SET sso = ?, authorization_status = 'authorized',
+                       cpa_status = 'unknown', cpa_error = '',
+                       grok2api_local_status = 'unknown', grok2api_local_error = '',
+                       grok2api_remote_status = 'unknown', grok2api_remote_error = '',
                        last_authenticated_at = ?, updated_at = ?
                    WHERE id = ?""",
                 (new_sso, utc_now(), utc_now(), int(account_id)),
