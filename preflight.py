@@ -23,9 +23,10 @@ def _result(key, name, status, required, message, connection_tested=False):
 def _valid_http_url(value):
     try:
         parsed = urllib.parse.urlsplit(str(value or "").strip())
+        parsed.port
     except ValueError:
         return False
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
 
 
 def _run_static_check(check, key, name, required, config):
