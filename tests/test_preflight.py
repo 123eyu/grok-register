@@ -137,6 +137,26 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         self.assertEqual(message, "Outlook 可用邮箱: 1/2")
         probe.assert_called_once_with("outlook-accounts.txt")
 
+    def test_proxy_health_logs_redact_configured_proxy_credentials(self):
+        config = self.config(
+            proxy_mode="single",
+            proxy="http://user:proxy-secret@127.0.0.1:7890",
+        )
+        manager = Mock()
+        manager.probe_all.return_value = [{"id": "single", "status": "healthy"}]
+        logs = []
+
+        def get_manager(config, log):
+            log("proxy source failed: " + config["proxy"])
+            return manager
+
+        with patch("proxy_pool.get_manager", side_effect=get_manager):
+            preflight._check_proxy_connection(config, log_callback=logs.append)
+
+        self.assertEqual(len(logs), 1)
+        self.assertNotIn("proxy-secret", logs[0])
+        self.assertIn("[REDACTED]", logs[0])
+
     def test_safe_error_redacts_configured_secrets(self):
         config = self.config(cloudmail_public_token="public-secret")
         message = preflight._safe_error(
