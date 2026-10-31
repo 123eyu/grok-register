@@ -128,7 +128,6 @@ _MIGRATIONS = {
     6: (
         "ALTER TABLE registration_attempts ADD COLUMN failure_type TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE registration_attempts ADD COLUMN screenshot_path TEXT NOT NULL DEFAULT ''",
-        "CREATE INDEX idx_registration_attempts_failure_type ON registration_attempts(failure_type)",
     ),
 }
 
