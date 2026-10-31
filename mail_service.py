@@ -203,8 +203,14 @@ def _body_value_text(value, html=False):
         content_type = str(value.get("contentType") or value.get("content_type") or "").lower()
         html = html or content_type == "html"
         value = content
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
     if not isinstance(value, str) or not value.strip():
         return ""
+    html = html or bool(re.search(
+        r"(?is)<(?:html|head|body|style|script|div|p|br|table|span|a|ul|ol)\\b",
+        value,
+    ))
     return _html_to_text(value) if html else value
 
 
@@ -219,9 +225,7 @@ def normalize_mail_body(*sources):
             continue
         if isinstance(source, (str, bytes)):
             message = _parse_rfc822(source)
-            value = _mime_message_text(message) if message is not None else (
-                source.decode("utf-8", errors="replace") if isinstance(source, bytes) else source
-            )
+            value = _mime_message_text(message) if message is not None else _body_value_text(source)
             if value.strip():
                 parts.append(value)
             continue
