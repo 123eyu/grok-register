@@ -318,7 +318,8 @@ def persist_account_result(result, callbacks, ops):
     persist_status = getattr(ops, "persist_account_status", None)
     if callable(persist_status) and account_id is not None:
         try:
-            persist_status(account_id, pools, cpa, result.password, result.sso)
+            if persist_status(account_id, pools, cpa, result.password, result.sso) is False:
+                raise RuntimeError("account row was not found while saving integration status")
         except Exception as exc:
             status_persist_error = str(exc)
             callbacks.log("[!] CPA/Grok2API 状态写入 SQLite 失败: %s" % exc)
