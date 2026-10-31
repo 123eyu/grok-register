@@ -950,8 +950,8 @@ def extract_verification_code(text, subject=""):
         + _CODE_TOKEN_BOUNDARY,
     ]
     subject_codes = _matching_codes(subject_patterns, subject)
-    if len(subject_codes) == 1:
-        return next(iter(subject_codes))
+    if subject_codes:
+        return next(iter(subject_codes)) if len(subject_codes) == 1 else None
 
     context_patterns = [
         r"\b(?:confirmation|verification|security|one[-\s]?time)\s*"
@@ -974,7 +974,8 @@ def extract_verification_code(text, subject=""):
     # The legacy xAI format uses a single XXX-XXX token without body context.
     # Do not guess when a message contains multiple different candidates.
     candidates = _matching_codes([r"(?<![A-Z0-9])([A-Z0-9]{3}-[A-Z0-9]{3})(?![A-Z0-9])"], text)
-    return next(iter(candidates)) if len(candidates) == 1 else None
+    trusted_context = re.search(r"\b(?:xAI|Grok)\b", subject + "\n" + text, re.IGNORECASE)
+    return next(iter(candidates)) if len(candidates) == 1 and trusted_context else None
 
 def generate_username(length=10):
     chars = string.ascii_lowercase + string.digits
