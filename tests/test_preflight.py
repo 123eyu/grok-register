@@ -247,6 +247,21 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         self.assertEqual(check["status"], "WARN")
         self.assertFalse(check["required"])
 
+    def test_proxy_pool_static_check_rejects_unparseable_source_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pool_file = Path(directory) / "proxies.txt"
+            pool_file.write_text("not a proxy node\\n", encoding="utf-8")
+            result = preflight.run_health_checks(self.config(
+                cpa_export_enabled=False,
+                proxy_mode="pool",
+                proxy_pool_file=str(pool_file),
+            ))
+
+        check = self.by_key(result)["proxy"]
+        self.assertFalse(result["ready"])
+        self.assertEqual(check["status"], "ERROR")
+        self.assertIn("代理源中没有可用节点", check["message"])
+
     def test_proxy_pool_uses_any_valid_source_and_warns_for_invalid_source(self):
         with tempfile.TemporaryDirectory() as directory:
             pool_file = Path(directory) / "proxies.txt"
