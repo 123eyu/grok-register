@@ -46,8 +46,7 @@ def _check_configuration(config):
         validation_config["cloudflare_api_base"] = DEFAULT_CONFIG["cloudflare_api_base"]
     if provider != "cloudmail":
         validation_config["cloudmail_api_base"] = DEFAULT_CONFIG["cloudmail_api_base"]
-    if str(config.get("proxy_mode") or "auto").lower() != "pool":
-        validation_config["proxy_pool_subscription_url"] = DEFAULT_CONFIG["proxy_pool_subscription_url"]
+    validation_config["proxy_pool_subscription_url"] = DEFAULT_CONFIG["proxy_pool_subscription_url"]
     try:
         validate_config_structure(validation_config)
     except Exception as exc:
