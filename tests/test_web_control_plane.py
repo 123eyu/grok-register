@@ -370,11 +370,13 @@ class WebControlPlaneTests(unittest.TestCase):
         with patch.object(self.server, "_get_database", return_value=database):
             single = self.client.delete("/api/accounts/%s" % first)
             bulk = self.client.request("DELETE", "/api/accounts", json={"ids": [second, second]})
-            invalid = self.client.request("DELETE", "/api/accounts", json={"ids": [True]})
+            invalid_bool = self.client.request("DELETE", "/api/accounts", json={"ids": [True]})
+            invalid_float = self.client.request("DELETE", "/api/accounts", json={"ids": [1.5]})
         self.assertEqual(single.status_code, 200)
         self.assertEqual(bulk.status_code, 200)
         self.assertEqual(bulk.json()["deleted_count"], 1)
-        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid_bool.status_code, 400)
+        self.assertEqual(invalid_float.status_code, 400)
         self.assertEqual(database.account_count(), 0)
 
     def test_account_api_rejects_invalid_date_filter(self):
