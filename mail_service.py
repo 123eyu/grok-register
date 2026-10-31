@@ -943,9 +943,16 @@ def extract_verification_code(text, subject=""):
     subject = _decode_header_value(subject)
     text = str(text or "")
 
-    subject_patterns = [
+    legacy_subject = re.match(
         r"^\s*([A-Z0-9]{3}-[A-Z0-9]{3})(?![A-Z0-9])\s+xAI\b",
-        r"\b(?:confirmation|verification|security|one[-\s]?time)\s+"
+        subject,
+        re.IGNORECASE,
+    )
+    if legacy_subject:
+        return legacy_subject.group(1).upper()
+
+    subject_patterns = [
+        r"\b(?:confirm(?:ation)?|verification|security|one[-\s]?time)\s+"
         r"(?:code|pin|passcode)\s*(?:is\s+|[:：]\s*|\s+)"
         + _CODE_TOKEN_BOUNDARY,
     ]
@@ -954,10 +961,10 @@ def extract_verification_code(text, subject=""):
         return next(iter(subject_codes)) if len(subject_codes) == 1 else None
 
     context_patterns = [
-        r"\b(?:confirmation|verification|security|one[-\s]?time)\s*"
+        r"\b(?:confirm(?:ation)?|verification|security|one[-\s]?time)\s*"
         r"(?:code|pin|passcode)\s*(?:is\s+|[:：]\s*|\s+)"
         + _CODE_TOKEN_BOUNDARY,
-        r"\b(?:your\s+code|code|pin|passcode)\s*(?:is\s+|[:：]\s*)"
+        r"\b(?:your\s+code|code|pin|passcode)\s*(?:is\s+|[:：]\s*|\s+)"
         + _CODE_TOKEN_BOUNDARY,
         r"(?:验证码|确认码|校验码|一次性密码)\s*(?:是|为|[:：])?\s*"
         + _CODE_TOKEN_BOUNDARY,
