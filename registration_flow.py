@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import threading
+import traceback
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from app_config import config as app_config
@@ -111,6 +112,7 @@ class RegistrationOperations:
     preflight_mail: Optional[Callable[[], Any]] = None
     persist_account_record: Optional[Callable[[Any], Dict[str, Any]]] = None
     persist_account_status: Optional[Callable[[int, Dict[str, Any], Dict[str, Any], str, str], Any]] = None
+    capture_failure_diagnostics: Optional[Callable[[Dict[str, Any]], str]] = None
 
 
 @dataclass
@@ -341,10 +343,55 @@ def _notify_observer(observer, result, account, output, callbacks):
         callbacks.log(f"[Debug] observer 执行失败: {exc}")
 
 
-def _notify_attempt(callbacks, slot_index, attempt_number, started_at, account, output, status, error):
+def _attempt_failure_type(status, error, stage, output):
+    if status == "cancelled":
+        return "cancelled"
+    if status == "uncertain":
+        return "outcome_uncertain"
+    if status == "rejected":
+        if isinstance(error, EmailSignupUnavailable):
+            return "signup_rejected"
+        if isinstance(error, RegistrationRiskDenied):
+            return "risk_denied"
+        return "rejected"
+    if status == "registered_unsaved":
+        return "persistence"
+    if status in ("retrying", "failed"):
+        if error is not None and (
+            isinstance(error, ProxyPoolError) or is_proxy_transport_exception(error)
+        ):
+            return "proxy_transport"
+        if stage in (STAGE_BROWSER_START, STAGE_PAGE_OPEN):
+            return "browser"
+        if stage in (STAGE_EMAIL_SUBMIT, STAGE_CODE_WAIT, STAGE_CODE_SUBMIT):
+            return "mail_or_verification"
+        return "registration"
+    if output is not None:
+        pool_warning = any(
+            isinstance(state, dict) and state.get("enabled") and not state.get("ok")
+            for state in output.pools.values()
+        )
+        cpa_warning = bool(
+            output.cpa and not output.cpa.get("skipped")
+            and (
+                not output.cpa.get("ok") or output.cpa.get("warning")
+                or output.cpa.get("partial") or output.cpa.get("cpa_copy_error")
+            )
+        )
+        if (
+            pool_warning or cpa_warning or output.legacy_export_error
+            or output.status_persist_error
+        ):
+            return "postprocess"
+    return ""
+
+
+def _notify_attempt(callbacks, slot_index, attempt_number, started_at, account, output, status, error, ops):
     callback = getattr(callbacks, "record_attempt", None)
     if not callable(callback):
         return
+
+    stage = current_registration_stage()
     message = str(error or "")
     error_type = type(error).__name__ if error is not None else ""
     if error is None and output is not None:
@@ -358,20 +405,48 @@ def _notify_attempt(callbacks, slot_index, attempt_number, started_at, account, 
                 error_type = kind
                 message = str(detail)
                 break
+
+    trace = ""
+    if error is not None:
+        trace = "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
+
     if account is not None:
         for secret in (getattr(account, "password", ""), getattr(account, "sso", "")):
             if secret:
                 message = message.replace(str(secret), "[REDACTED]")
+                trace = trace.replace(str(secret), "[REDACTED]")
+
+    failure_type = _attempt_failure_type(status, error, stage, output)
+    screenshot_path = ""
+    capture = getattr(ops, "capture_failure_diagnostics", None)
+    if status in ("retrying", "failed", "uncertain", "rejected") and callable(capture):
+        try:
+            screenshot_path = str(capture({
+                "slot_index": slot_index,
+                "attempt_number": attempt_number,
+                "worker_key": threading.current_thread().name,
+                "stage": stage,
+                "status": status,
+                "error_type": error_type,
+            }) or "")
+        except Exception as exc:
+            callbacks.log("[Debug] 失败截图捕获异常: %s" % type(exc).__name__)
+
     try:
         callback({
             "slot_index": slot_index,
             "attempt_number": attempt_number,
             "worker_key": threading.current_thread().name,
-            "stage": current_registration_stage(),
+            "stage": stage,
             "status": status,
             "account_id": getattr(output, "account_id", None),
             "error_type": error_type,
             "error_message": message[:500],
+            "traceback": trace[:8000],
+            "failure_type": failure_type,
+            "screenshot_path": screenshot_path,
             "started_at": started_at,
             "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         })
@@ -538,7 +613,7 @@ def _run_batch_managed(settings, callbacks, observer, ops):
                     attempt_status = "succeeded" if output.saved else "registered_unsaved"
                 _notify_attempt(
                     callbacks, slot_index, attempt_index, attempt_started_at,
-                    account, output, attempt_status, attempt_error,
+                    account, output, attempt_status, attempt_error, ops,
                 )
                 _notify_observer(observer, result, account, output, callbacks)
             if not continue_batch or result.cancelled: break
