@@ -1,5 +1,6 @@
 """编排 GUI 与 CLI 共用的单账号注册和批量执行流程。"""
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import threading
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -82,6 +83,7 @@ class RegistrationCallbacks:
     log: Callable[[str], None]
     cancelled: Callable[[], bool]
     stop_all: Optional[Callable[[], None]] = None
+    record_attempt: Optional[Callable[[Dict[str, Any]], None]] = None
 
 
 @dataclass
@@ -107,7 +109,8 @@ class RegistrationOperations:
     internal_stage_markers: bool = False
     screen_sso: Optional[Callable[[str, str], Any]] = None
     preflight_mail: Optional[Callable[[], Any]] = None
-    persist_account_record: Optional[Callable[[RegistrationResult], Dict[str, Any]]] = None
+    persist_account_record: Optional[Callable[[Any], Dict[str, Any]]] = None
+    persist_account_status: Optional[Callable[[int, Dict[str, Any], Dict[str, Any], str, str], Any]] = None
 
 
 @dataclass
@@ -132,6 +135,8 @@ class OutputResult:
     pools: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     cpa: Dict[str, Any] = field(default_factory=dict)
     legacy_export_error: str = ""
+    account_id: Optional[int] = None
+    status_persist_error: str = ""
 
 
 @dataclass
@@ -253,50 +258,75 @@ def persist_account_result(result, callbacks, ops):
     if callable(screen):
         screen(result.sso, result.email)
     legacy_export_error = ""
+    account_id = None
     try:
         persist_record = getattr(ops, "persist_account_record", None)
         if callable(persist_record):
             persistence = persist_record(result)
             if isinstance(persistence, dict):
+                account_id = persistence.get("account_id")
                 legacy_export_error = str(persistence.get("legacy_export_error") or "")
         else:
             ops.persist_account_line(result.email, result.password, result.sso)
-        saved = True; save_error = ""; pending_saved = False
+        saved = True
+        save_error = ""
+        pending_saved = False
         if legacy_export_error:
             callbacks.log("[!] SQLite 已保存账号，但旧版 TXT 兼容导出失败: %s" % legacy_export_error)
     except Exception as exc:
-        saved = False; save_error = str(exc)
+        saved = False
+        save_error = str(exc)
         try:
-            pending_saved = bool(ops.queue_unsaved_result({"email": result.email, "password": result.password, "sso": result.sso, "profile": result.profile}, save_error))
+            pending_saved = bool(ops.queue_unsaved_result(
+                {"email": result.email, "password": result.password, "sso": result.sso, "profile": result.profile},
+                save_error,
+            ))
         except Exception as pending_exc:
-            pending_saved = False; callbacks.log(f"[!] pending 队列写入异常: {pending_exc}")
-        callbacks.log(f"[!] 账号已注册但主结果文件保存失败: {save_error}")
-        callbacks.log("[!] 未保存账号已写入 pending 队列，等待人工重试" if pending_saved else "[!] pending 队列也写入失败；已停止向下游发布此账号")
+            pending_saved = False
+            callbacks.log("[!] pending 队列写入异常: %s" % pending_exc)
+        callbacks.log("[!] 账号已注册但主结果文件保存失败: %s" % save_error)
+        callbacks.log(
+            "[!] 未保存账号已写入 pending 队列，等待人工重试"
+            if pending_saved else "[!] pending 队列也写入失败；已停止向下游发布此账号"
+        )
         if not pending_saved:
             return OutputResult(
                 registered=True, saved=False, pending_saved=False, save_error=save_error,
                 cpa={"ok": False, "skipped": True, "reason": "account_not_persisted"},
             )
+
     try:
         pools = ops.add_tokens(result.sso, result.email)
         if not isinstance(pools, dict):
             raise TypeError("token pool result must be a dict")
     except Exception as exc:
-        callbacks.log(f"[!] token 入池后处理异常，账号结果已保留: {exc}")
+        callbacks.log("[!] token 入池后处理异常，账号结果已保留: %s" % exc)
         pools = {"internal": {"enabled": True, "ok": False, "error": str(exc)}}
     for name, state in pools.items():
         if isinstance(state, dict) and state.get("enabled") and not state.get("ok"):
-            callbacks.log(f"[!] grok2api {name} 入池失败: {state.get('error')}")
+            callbacks.log("[!] grok2api %s 入池失败: %s" % (name, state.get("error")))
+
     try:
         cpa = ops.export_cpa(result.email, result.password, result.sso)
         if not isinstance(cpa, dict):
             raise TypeError("CPA result must be a dict")
     except Exception as exc:
-        callbacks.log(f"[!] CPA 导出后处理异常，账号结果已保留: {exc}")
+        callbacks.log("[!] CPA 导出后处理异常，账号结果已保留: %s" % exc)
         cpa = {"ok": False, "skipped": False, "error": str(exc)}
+
+    status_persist_error = ""
+    persist_status = getattr(ops, "persist_account_status", None)
+    if callable(persist_status) and account_id is not None:
+        try:
+            persist_status(account_id, pools, cpa, result.password, result.sso)
+        except Exception as exc:
+            status_persist_error = str(exc)
+            callbacks.log("[!] CPA/Grok2API 状态写入 SQLite 失败: %s" % exc)
+
     return OutputResult(
         registered=True, saved=saved, pending_saved=pending_saved, save_error=save_error,
         pools=pools, cpa=cpa, legacy_export_error=legacy_export_error,
+        account_id=account_id, status_persist_error=status_persist_error,
     )
 
 
@@ -327,7 +357,7 @@ def _record_success(result, settings, callbacks, ops, account, output, last_clea
     cpa_warning = bool(
         output.cpa and not output.cpa.get("skipped")
         and (not output.cpa.get("ok") or output.cpa.get("warning") or output.cpa.get("cpa_copy_error"))
-    ) or bool(output.legacy_export_error)
+    ) or bool(output.legacy_export_error) or bool(output.status_persist_error)
     if pool_warning or cpa_warning: result.postprocess_warning_count += 1
     return last_cleanup_success_count
 
