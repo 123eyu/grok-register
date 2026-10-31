@@ -308,7 +308,11 @@ class OptionalMultithreadTests(unittest.TestCase):
             "AccountRetryNeeded": RetryNeeded,
             "_screen_registered_sso": lambda *_args, **_kwargs: None,
         }
-        callbacks = RegistrationCallbacks(log=lambda _message: None, cancelled=lambda: False)
+        callbacks = RegistrationCallbacks(
+            log=lambda _message: None,
+            cancelled=lambda: False,
+            record_attempt=lambda _attempt: None,
+        )
 
         with patch("registration_parallel.load_isolated_module", side_effect=fake_loader), patch(
             "registration_diagnostics.capture_failure_screenshot", side_effect=capture
