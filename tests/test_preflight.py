@@ -211,6 +211,23 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         self.assertNotIn("public-secret", message)
         self.assertIn("[REDACTED]", message)
 
+    def test_cpa_static_check_does_not_execute_external_package_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "cpa_xai"
+            package.mkdir()
+            (package / "__init__.py").write_text(
+                "raise RuntimeError('must not execute during static check')\\n",
+                encoding="utf-8",
+            )
+            result = preflight.run_health_checks(self.config(
+                cpa_export_enabled=True,
+                api_reverse_tools=directory,
+            ))
+
+        cpa = self.by_key(result)["cpa"]
+        self.assertTrue(result["ready"])
+        self.assertEqual(cpa["status"], "OK")
+
     def test_invalid_optional_cpa_endpoint_is_a_warning(self):
         result = preflight.run_health_checks(self.config(
             cpa_export_enabled=True,
