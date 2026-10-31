@@ -58,7 +58,7 @@ class UnifiedHealthCheckTests(unittest.TestCase):
         self.assertTrue(checks["mailbox"]["required"])
 
     def test_optional_cpa_failure_is_a_warning_not_a_blocker(self):
-        with patch("cpa_export._load_mint_and_export", side_effect=ImportError("missing package")):
+        with patch("cpa_export.CpaExportSettings.from_config", side_effect=ImportError("missing package")):
             result = preflight.run_health_checks(self.config(cpa_export_enabled=True))
         cpa = self.by_key(result)["cpa"]
 
