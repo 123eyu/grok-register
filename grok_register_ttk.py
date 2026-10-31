@@ -774,17 +774,34 @@ def resolve_registration_count(count, log_callback=None):
 
 def run_registration_common(count, log_callback, cancel_callback, accounts_output_file, observer):
     from registration_flow import RegistrationCallbacks, RegistrationOperations, run_batch
-    from storage.account_service import persist_account
+    from storage.account_service import persist_account, persist_account_status
     from storage.database import Database
     from storage.legacy_import import import_legacy_directory
 
     provider = str(config.get("email_provider", "") or "").strip().lower()
-    effective_count = resolve_registration_count(count, log_callback=log_callback)
     task_outlook_runtime = None
     database = None
     registration_run_id = None
 
     try:
+        database = Database(config.get("database_path", "./data/grok-register.sqlite3"))
+        snapshot_keys = (
+            "proxy_mode", "multi_thread_enabled", "multi_thread_workers", "enable_nsfw",
+            "email_provider", "proxy_pool_endpoint_mode",
+        )
+        config_snapshot = {key: config.get(key) for key in snapshot_keys}
+        registration_run_id = database.create_registration_run(max(1, int(count)), config_snapshot)
+
+        imported_files = import_legacy_directory(
+            database, os.path.dirname(os.path.abspath(accounts_output_file)), provider
+        )
+        for path, summary in imported_files:
+            log_callback(
+                "[*] 旧版账号文件导入: %s | 新增 %s | 重复 %s | 格式错误 %s"
+                % (os.path.basename(path), summary.imported, summary.duplicates, summary.malformed)
+            )
+
+        effective_count = resolve_registration_count(count, log_callback=log_callback)
         if provider == "outlook":
             from outlook_mailbox_pool import create_outlook_task_runtime
             task_outlook_runtime = create_outlook_task_runtime(
@@ -799,27 +816,20 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
             _bind_mail_service()
             _mail_service.cloudmail_preflight(log_callback=log_callback)
 
-        database = Database(config.get("database_path", "./data/grok-register.sqlite3"))
-        imported_files = import_legacy_directory(
-            database, os.path.dirname(os.path.abspath(accounts_output_file)), provider
-        )
-        for path, summary in imported_files:
-            log_callback(
-                "[*] 旧版账号文件导入: %s | 新增 %s | 重复 %s | 格式错误 %s"
-                % (os.path.basename(path), summary.imported, summary.duplicates, summary.malformed)
-            )
-
-        snapshot_keys = (
-            "proxy_mode", "multi_thread_enabled", "multi_thread_workers", "enable_nsfw",
-            "email_provider", "proxy_pool_endpoint_mode",
-        )
-        config_snapshot = {key: config.get(key) for key in snapshot_keys}
-        registration_run_id = database.create_registration_run(effective_count, config_snapshot)
+        database.update_registration_run(registration_run_id, requested_count=effective_count)
 
         def persist_record(account):
             return persist_account(
                 database, accounts_output_file, account, provider, registration_run_id
             )
+
+        def persist_status(account_id, pools, cpa, password, sso):
+            return persist_account_status(
+                database, account_id, pools, cpa, password=password, sso=sso
+            )
+
+        def record_attempt(attempt):
+            database.create_registration_attempt(registration_run_id, **attempt)
 
         def record_progress(batch, account, output):
             try:
@@ -836,7 +846,11 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                 log_callback("[!] 注册任务统计写入 SQLite 失败: %s" % exc)
             observer(batch, account, output)
 
-        callbacks = RegistrationCallbacks(log=log_callback, cancelled=cancel_callback)
+        callbacks = RegistrationCallbacks(
+            log=log_callback,
+            cancelled=cancel_callback,
+            record_attempt=record_attempt,
+        )
         parallel_enabled = bool(config.get("multi_thread_enabled", False))
         parallel_workers = int(config.get("multi_thread_workers", 4) or 4)
         if parallel_enabled and parallel_workers > 1 and effective_count > 1:
@@ -853,6 +867,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                 max_slot_retry=3,
                 max_mail_retry=3,
                 persist_account_record=persist_record,
+                persist_account_status=persist_status,
             )
         else:
             operations = RegistrationOperations(
@@ -872,6 +887,7 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                 enable_nsfw=lambda sso: enable_nsfw_for_token(sso, log_callback=log_callback),
                 persist_account_line=lambda email, password, sso: _append_account_line(accounts_output_file, email, password, sso),
                 persist_account_record=persist_record,
+                persist_account_status=persist_status,
                 queue_unsaved_result=lambda payload, error: _queue_unsaved_account(accounts_output_file, payload, error, log_callback),
                 add_tokens=lambda sso, email: add_token_to_grok2api_pools(sso, email=email, log_callback=log_callback),
                 export_cpa=lambda email, password, sso: maybe_export_cpa_xai_after_success(
@@ -896,20 +912,17 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
                 max_mail_retry=3,
             )
 
-        try:
-            database.update_registration_run(
-                registration_run_id,
-                status="cancelled" if batch.cancelled else "completed",
-                processed_count=batch.processed_count,
-                success_count=batch.success_count,
-                failed_count=batch.fail_count,
-                uncertain_count=batch.uncertain_count,
-                postprocess_warning_count=batch.postprocess_warning_count,
-                cancelled=bool(batch.cancelled),
-                finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            )
-        except Exception as exc:
-            log_callback("[!] 注册任务完成状态写入 SQLite 失败: %s" % exc)
+        database.update_registration_run(
+            registration_run_id,
+            status="cancelled" if batch.cancelled else "completed",
+            processed_count=batch.processed_count,
+            success_count=batch.success_count,
+            failed_count=batch.fail_count,
+            uncertain_count=batch.uncertain_count,
+            postprocess_warning_count=batch.postprocess_warning_count,
+            cancelled=bool(batch.cancelled),
+            finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        )
         return batch
     except Exception as exc:
         if database is not None and registration_run_id is not None:
