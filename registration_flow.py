@@ -337,6 +337,32 @@ def _notify_observer(observer, result, account, output, callbacks):
         callbacks.log(f"[Debug] observer 执行失败: {exc}")
 
 
+def _notify_attempt(callbacks, slot_index, attempt_number, started_at, account, output, status, error):
+    callback = getattr(callbacks, "record_attempt", None)
+    if not callable(callback):
+        return
+    message = str(error or "")
+    if account is not None:
+        for secret in (getattr(account, "password", ""), getattr(account, "sso", "")):
+            if secret:
+                message = message.replace(str(secret), "[REDACTED]")
+    try:
+        callback({
+            "slot_index": slot_index,
+            "attempt_number": attempt_number,
+            "worker_key": threading.current_thread().name,
+            "stage": current_registration_stage(),
+            "status": status,
+            "account_id": getattr(output, "account_id", None),
+            "error_type": type(error).__name__ if error is not None else "",
+            "error_message": message[:500],
+            "started_at": started_at,
+            "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
+    except Exception as exc:
+        callbacks.log("[!] 注册尝试状态写入 SQLite 失败: %s" % exc)
+
+
 def _run_cleanup_safely(ops, callbacks, reason):
     try:
         ops.cleanup(reason); return True
@@ -388,8 +414,16 @@ def _run_batch_managed(settings, callbacks, observer, ops):
     try:
         while result.processed_count < settings.count:
             if callbacks.cancelled(): result.cancelled = True; break
-            slot_index = result.processed_count + 1; attempt_index = retry_count_for_slot + 1
-            account = None; output = None; continue_batch = True; transport_error = None; slot_success = False
+            slot_index = result.processed_count + 1
+            attempt_index = retry_count_for_slot + 1
+            attempt_started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            attempt_status = "failed"
+            attempt_error = None
+            account = None
+            output = None
+            continue_batch = True
+            transport_error = None
+            slot_success = False
             _set_registration_stage(STAGE_LEASE_ACQUIRE)
             try:
                 begin_registration_slot(slot_index=slot_index, attempt_index=attempt_index, worker_key=threading.current_thread().name, log=callbacks.log, cancel_callback=callbacks.cancelled)
@@ -402,6 +436,7 @@ def _run_batch_managed(settings, callbacks, observer, ops):
                 callbacks.log(f"--- 开始第 {slot_index}/{settings.count} 个账号 ---")
                 account = register_one_account(callbacks, ops, enable_nsfw=settings.enable_nsfw, max_mail_retry=settings.max_mail_retry)
                 output = persist_account_result(account, callbacks, ops)
+                attempt_status = "succeeded" if output.saved else "registered_unsaved"
                 feedback_kind, feedback_error = _feedback_from_output(account, output); lease = current_proxy_lease()
                 if lease is not None and feedback_kind == "hard_transport":
                     transport_error = ProxyTransportError(feedback_error or "postprocess proxy failure")
@@ -413,57 +448,79 @@ def _run_batch_managed(settings, callbacks, observer, ops):
                     callbacks.log("[Debug] 后处理属于本地兼容/配置错误，不计入代理传输健康度")
                 slot_success = bool(account and account.ok); retry_count_for_slot = 0
                 last_cleanup_success_count = _record_success(result, settings, callbacks, ops, account, output, last_cleanup_success_count)
-            except ProxyAcquireCancelled:
+            except ProxyAcquireCancelled as exc:
+                attempt_status = "cancelled"; attempt_error = exc
                 result.cancelled = True; callbacks.log("[!] 已在等待代理租约时停止"); continue_batch = False
-            except ops.cancelled_exception:
+            except ops.cancelled_exception as exc:
+                attempt_status = "cancelled"; attempt_error = exc
                 result.cancelled = True; callbacks.log("[!] 注册被停止"); continue_batch = False
             except ops.retry_exception as exc:
+                attempt_error = exc
                 stage = current_registration_stage(); disposition = registration_retry_disposition(stage, exc)
                 if disposition != SAFE_NEW_LEASE:
+                    attempt_status = "uncertain"
                     _record_uncertain(result, callbacks, stage, exc); retry_count_for_slot = 0
                 else:
+                    attempt_status = "retrying"
                     retry_count_for_slot += 1
                     if retry_count_for_slot <= settings.max_slot_retry: callbacks.log(f"[!] 当前账号流程卡住，安全重试第 {retry_count_for_slot}/{settings.max_slot_retry} 次: {exc}")
                     else:
+                        attempt_status = "failed"
                         result.fail_count += 1; result.processed_count += 1; retry_count_for_slot = 0; callbacks.log(f"[-] 当前账号已达到最大重试次数，跳过: {exc}")
             except EmailSignupUnavailable as exc:
+                attempt_status = "rejected"; attempt_error = exc
                 result.fail_count += 1; result.processed_count += 1; retry_count_for_slot = 0
                 callbacks.log(f"[-] 邮箱注册被 xAI 页面明确拒绝，停止本批次以免反复提交: {exc}")
                 if callbacks.stop_all is not None:
                     callbacks.stop_all()
                 continue_batch = False
             except RegistrationRiskDenied as exc:
+                attempt_status = "rejected"; attempt_error = exc
                 result.fail_count += 1; result.processed_count += 1; retry_count_for_slot = 0
                 callbacks.log(f"[-] 注册风控拒绝，已跳过入库: {exc}")
             except Exception as exc:
+                attempt_error = exc
                 has_lease = current_proxy_lease() is not None
                 proxy_failure = isinstance(exc, ProxyPoolError) or (has_lease and is_proxy_transport_exception(exc))
                 stage = current_registration_stage(); disposition = registration_retry_disposition(stage, exc)
                 if proxy_failure and has_lease and is_proxy_transport_exception(exc): transport_error = exc
                 if disposition == OUTCOME_UNCERTAIN:
+                    attempt_status = "uncertain"
                     _record_uncertain(result, callbacks, stage, exc); retry_count_for_slot = 0
                 elif proxy_failure and disposition == SAFE_NEW_LEASE:
+                    attempt_status = "retrying"
                     retry_count_for_slot += 1
                     if retry_count_for_slot <= settings.max_slot_retry:
                         callbacks.log(f"[!] 当前账号代理在安全阶段不可用，释放租约并重试 {retry_count_for_slot}/{settings.max_slot_retry}: {exc}")
                     else:
+                        attempt_status = "failed"
                         result.fail_count += 1; result.processed_count += 1; retry_count_for_slot = 0; callbacks.log(f"[-] 当前账号代理重试达到上限，跳过: {exc}")
                 elif disposition == SAFE_NEW_LEASE and isinstance(exc, RecoverablePreSubmitError):
+                    attempt_status = "retrying"
                     retry_count_for_slot += 1
                     if retry_count_for_slot <= settings.max_slot_retry:
                         callbacks.log(f"[!] 提交前页面暂时不可用，重试 {retry_count_for_slot}/{settings.max_slot_retry}: {exc}")
                     else:
+                        attempt_status = "failed"
                         result.fail_count += 1; result.processed_count += 1; retry_count_for_slot = 0
                         callbacks.log(f"[-] 提交前页面重试达到上限，跳过: {exc}")
                 elif disposition == SAFE_NEW_LEASE:
+                    attempt_status = "failed"
                     raise
                 else:
+                    attempt_status = "failed"
                     result.fail_count += 1; result.processed_count += 1; retry_count_for_slot = 0; callbacks.log(f"[-] 注册失败: {exc}")
             finally:
                 try:
                     end_registration_slot(success=slot_success, transport_error=transport_error)
                 except Exception as exc:
                     callbacks.log(f"[Debug] 代理租约释放失败: {exc}")
+                if output is not None:
+                    attempt_status = "succeeded" if output.saved else "registered_unsaved"
+                _notify_attempt(
+                    callbacks, slot_index, attempt_index, attempt_started_at,
+                    account, output, attempt_status, attempt_error,
+                )
                 _notify_observer(observer, result, account, output, callbacks)
             if not continue_batch or result.cancelled: break
     finally:
