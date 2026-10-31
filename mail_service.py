@@ -147,7 +147,10 @@ def _parse_rfc822(value):
     if not isinstance(value, (str, bytes)) or not _looks_like_rfc822(value):
         return None
     raw = value if isinstance(value, bytes) else value.encode("utf-8", errors="replace")
-    return BytesParser(policy=policy.default).parsebytes(raw)
+    try:
+        return BytesParser(policy=policy.default).parsebytes(raw)
+    except Exception:
+        return None
 
 
 def _decode_mime_part(part):
@@ -265,6 +268,10 @@ def normalize_mail_message(*sources):
     for source in sources:
         if isinstance(source, Message):
             subject = _decode_header_value(source.get("Subject", ""))
+        elif isinstance(source, (str, bytes)):
+            message = _parse_rfc822(source)
+            if message is not None:
+                subject = _decode_header_value(message.get("Subject", ""))
         elif isinstance(source, dict):
             subject = _decode_header_value(source.get("subject", ""))
             if not subject:
