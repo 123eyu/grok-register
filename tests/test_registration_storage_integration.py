@@ -95,7 +95,7 @@ class RegistrationStorageIntegrationTests(unittest.TestCase):
             root = Path(directory)
             database_path = root / "accounts.sqlite3"
             output_path = root / "accounts-run.txt"
-            screenshot_dir = root / "diagnostics"
+            screenshot_dir = root / "diagnostics" / "registration"
             config = dict(engine.DEFAULT_CONFIG)
             config.update({
                 "database_path": str(database_path),
@@ -103,7 +103,7 @@ class RegistrationStorageIntegrationTests(unittest.TestCase):
                 "multi_thread_enabled": False,
             })
 
-            def capture(page, run_id, details, log_callback=None):
+            def capture(page, run_id, details, log_callback=None, screenshot_dir=None):
                 return capture_failure_screenshot(
                     page, run_id, details, log_callback=log_callback,
                     screenshot_dir=screenshot_dir,
@@ -137,6 +137,7 @@ class RegistrationStorageIntegrationTests(unittest.TestCase):
             self.assertEqual(attempt["error_type"], "RuntimeError")
             self.assertIn("browser start failed", attempt["traceback"])
             self.assertTrue(Path(attempt["screenshot_path"]).is_file())
+            self.assertEqual(Path(attempt["screenshot_path"]).parent, screenshot_dir)
             self.assertEqual(
                 Path(attempt["screenshot_path"]).read_bytes(),
                 b"fake-browser-screenshot",
