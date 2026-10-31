@@ -7,6 +7,7 @@ from registration_flow import (
     RegistrationCallbacks,
     RegistrationOperations,
     RegistrationResult,
+    _notify_attempt,
     persist_account_result,
     run_batch,
 )
@@ -316,6 +317,33 @@ class RegistrationFlowTests(unittest.TestCase):
         self.assertEqual(attempts[0]["screenshot_path"], "")
         self.assertEqual(attempts[0]["error_message"], "original failure")
         self.assertTrue(any("失败截图捕获异常" in message for message in logs))
+
+    def test_attempt_error_and_traceback_redact_account_credentials(self):
+        fake = FakeOps()
+        attempts = []
+        callbacks = RegistrationCallbacks(
+            log=lambda _message: None,
+            cancelled=lambda: False,
+            record_attempt=attempts.append,
+        )
+        account = RegistrationResult(
+            ok=True, email="user@example.com",
+            password="account-password-secret", sso="sso-token-secret",
+        )
+        try:
+            raise RuntimeError("failed with account-password-secret and sso-token-secret")
+        except RuntimeError as error:
+            _notify_attempt(
+                callbacks, 1, 1, "2026-10-31T12:00:00+00:00",
+                account, None, "failed", error, fake.operations(),
+            )
+
+        attempt = attempts[0]
+        self.assertNotIn("account-password-secret", attempt["error_message"])
+        self.assertNotIn("sso-token-secret", attempt["error_message"])
+        self.assertNotIn("account-password-secret", attempt["traceback"])
+        self.assertNotIn("sso-token-secret", attempt["traceback"])
+        self.assertIn("[REDACTED]", attempt["traceback"])
 
     def test_retrying_attempt_captures_screenshot_without_changing_retry(self):
         fake = FakeOps()
