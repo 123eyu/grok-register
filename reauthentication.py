@@ -26,11 +26,12 @@ def _wait_for_input(page, selector, deadline, cancelled):
 
 
 def _click_action(page, labels):
-    for button in page.eles("tag:button"):
-        label = str(button.text or "").strip().lower()
-        if label in labels:
-            button.click()
-            return True
+    for selector in ("tag:button", "tag:a", 'css:[role="button"]'):
+        for button in page.eles(selector):
+            label = str(button.text or "").strip().lower()
+            if label in labels:
+                button.click()
+                return True
     return False
 
 
@@ -52,7 +53,7 @@ def login_with_password(email, password, page, cancelled=lambda: False, log=lamb
 
     page.get(SIGNIN_URL)
     deadline = time.monotonic() + timeout
-    email_input = _wait_for_input(page, 'css:input[type="email"]', time.monotonic() + 8, cancelled)
+    email_input = _wait_for_input(page, 'css:input[type="email"],input[name="email"],input[autocomplete="email"]', time.monotonic() + 8, cancelled)
     if email_input is None:
         if not _click_action(page, {"login with email", "continue with email", "使用邮箱登录"}):
             raise RuntimeError("登录页没有邮箱登录入口")
@@ -79,7 +80,11 @@ def login_with_password(email, password, page, cancelled=lambda: False, log=lamb
         token = _session_cookie(page)
         if token:
             return token
-        page_text = str(page.run_js("return document.body ? document.body.innerText : ''") or "").lower()
+        try:
+            page_text = str(page.run_js("return document.body ? document.body.innerText : ''") or "").lower()
+        except RuntimeError:
+            # A successful login can invalidate the old page's JavaScript context.
+            page_text = ""
         if any(message in page_text for message in (
             "incorrect password", "invalid credentials", "password is incorrect",
             "密码错误", "账号或密码错误",
