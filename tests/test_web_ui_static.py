@@ -35,6 +35,8 @@ class WebUIStaticTests(unittest.TestCase):
         for marker in (
             'class="topbar"',
             'id="saveBtn"',
+            'id="healthBtn"',
+            'id="healthConnectBtn"',
             'id="startBtn"',
             'id="stopBtn"',
             'id="tabs"',
