@@ -82,6 +82,31 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("slot_index", attempt_columns)
         self.assertIsNotNone(tombstones)
 
+    def test_migrates_v6_accounts_to_reauthentication_schema(self):
+        from storage.database import _MIGRATIONS
+
+        path = Path(self.temp_dir.name) / "legacy-v6.sqlite3"
+        connection = sqlite3.connect(path)
+        for version in range(1, 7):
+            for statement in _MIGRATIONS[version]:
+                connection.execute(statement)
+            connection.execute("PRAGMA user_version = %s" % version)
+        connection.execute(
+            """INSERT INTO accounts (email, password, sso, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            ("legacy@example.com", "old-password", "old-token", "2026-10-30", "2026-10-30"),
+        )
+        connection.commit()
+        connection.close()
+
+        migrated = Database(path)
+        self.assertEqual(migrated.schema_version(), SCHEMA_VERSION)
+        self.assertEqual(migrated.account_count(), 1)
+        with migrated.connection() as connection:
+            self.assertIsNotNone(connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'job_accounts'"
+            ).fetchone())
+
     def test_initialization_is_idempotent(self):
         Database(self.database_path)
         Database(self.database_path)
