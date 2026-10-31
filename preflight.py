@@ -28,6 +28,16 @@ def _valid_http_url(value):
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def _run_static_check(check, key, name, required, config):
+    try:
+        return check()
+    except Exception as exc:
+        return _result(
+            key, name, "ERROR" if required else "WARN", required,
+            _safe_error(exc, config),
+        )
+
+
 def _safe_error(error, config):
     message = str(error or type(error).__name__)
     for key in (
@@ -397,13 +407,29 @@ def _check_grok2api_connection(config):
 def run_health_checks(config, connectivity=False, log_callback=None):
     """Run offline checks, optionally followed by explicit read-only connectivity probes."""
     cfg = dict(config or {})
+    proxy_required = (
+        str(cfg.get("proxy_mode") or "auto").lower() in {"single", "pool"}
+        or str(cfg.get("proxy_fallback") or "none").lower() == "single"
+    )
     checks = [
-        _check_configuration(cfg),
-        _check_browser_runtime(),
-        _check_proxy_config(cfg),
-        _check_mailbox_config(cfg),
-        _check_cpa_config(cfg),
-        _check_grok2api_config(cfg),
+        _run_static_check(
+            lambda: _check_configuration(cfg), "configuration", "Configuration", True, cfg
+        ),
+        _run_static_check(
+            _check_browser_runtime, "browser", "Browser Runtime", True, cfg
+        ),
+        _run_static_check(
+            lambda: _check_proxy_config(cfg), "proxy", "Proxy", proxy_required, cfg
+        ),
+        _run_static_check(
+            lambda: _check_mailbox_config(cfg), "mailbox", "Mailbox", True, cfg
+        ),
+        _run_static_check(
+            lambda: _check_cpa_config(cfg), "cpa", "CPA", False, cfg
+        ),
+        _run_static_check(
+            lambda: _check_grok2api_config(cfg), "grok2api", "Grok2API", False, cfg
+        ),
     ]
     probes = {
         "browser": _check_browser_connection,
