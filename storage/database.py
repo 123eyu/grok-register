@@ -11,7 +11,7 @@ import sqlite3
 from filelock import FileLock
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _MIGRATIONS = {
     1: (
@@ -128,6 +128,18 @@ _MIGRATIONS = {
     6: (
         "ALTER TABLE registration_attempts ADD COLUMN failure_type TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE registration_attempts ADD COLUMN screenshot_path TEXT NOT NULL DEFAULT ''",
+    ),
+    7: (
+        """CREATE TABLE job_accounts (
+            job_id INTEGER NOT NULL REFERENCES job_runs(id) ON DELETE CASCADE,
+            account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+            email TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error_message TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (job_id, email)
+        )""",
+        "CREATE INDEX idx_job_accounts_account_id ON job_accounts(account_id)",
     ),
 }
 
@@ -582,6 +594,113 @@ class Database:
                     ids,
                 ).fetchall()
         return [dict(row) for row in rows]
+
+
+    def create_job(self, job_type, accounts):
+        if not accounts:
+            raise ValueError("No accounts selected")
+        started = utc_now()
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """INSERT INTO job_runs (job_type, requested_count, started_at)
+                   VALUES (?, ?, ?)""",
+                (job_type, len(accounts), started),
+            )
+            job_id = cursor.lastrowid
+            connection.executemany(
+                """INSERT INTO job_accounts (job_id, account_id, email, updated_at)
+                   VALUES (?, ?, ?, ?)""",
+                [(job_id, account["id"], account["email"], started) for account in accounts],
+            )
+            return job_id
+
+    def update_job_item(self, job_id, email, status, error_message=""):
+        with self.transaction() as connection:
+            connection.execute(
+                """UPDATE job_accounts SET status = ?, error_message = ?, updated_at = ?
+                   WHERE job_id = ? AND email = ?""",
+                (status, str(error_message or "")[:500], utc_now(), job_id, email),
+            )
+            counts = connection.execute(
+                """SELECT COUNT(*) AS processed,
+                          SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS successes,
+                          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failures
+                   FROM job_accounts
+                   WHERE job_id = ? AND status IN ('succeeded', 'failed')""",
+                (job_id,),
+            ).fetchone()
+            connection.execute(
+                """UPDATE job_runs
+                   SET processed_count = ?, success_count = ?, failed_count = ?
+                   WHERE id = ?""",
+                (counts["processed"], counts["successes"], counts["failures"], job_id),
+            )
+
+    def finish_job(self, job_id, status, cancelled=False, error_message=""):
+        with self.transaction() as connection:
+            connection.execute(
+                """UPDATE job_runs
+                   SET status = ?, cancelled = ?, error_message = ?, finished_at = ?
+                   WHERE id = ?""",
+                (status, int(bool(cancelled)), str(error_message or "")[:500], utc_now(), job_id),
+            )
+
+    def get_job(self, job_id):
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM job_runs WHERE id = ?", (int(job_id),)
+            ).fetchone()
+            if row is None:
+                return None
+            result = dict(row)
+            result["items"] = [dict(item) for item in connection.execute(
+                """SELECT account_id, email, status, error_message, updated_at
+                   FROM job_accounts WHERE job_id = ? ORDER BY rowid""",
+                (job_id,),
+            )]
+            return result
+
+    def list_jobs(self, job_type="", limit=50, offset=0):
+        conditions = " WHERE job_type = ?" if job_type else ""
+        args = [job_type] if job_type else []
+        with self.connection() as connection:
+            total = connection.execute(
+                "SELECT COUNT(*) FROM job_runs" + conditions, args
+            ).fetchone()[0]
+            items = connection.execute(
+                """SELECT id, job_type, status, requested_count, processed_count,
+                          success_count, failed_count, cancelled, started_at,
+                          finished_at, error_message
+                   FROM job_runs""" + conditions + " ORDER BY id DESC LIMIT ? OFFSET ?",
+                args + [int(limit), int(offset)],
+            ).fetchall()
+        return {"total": total, "items": [dict(item) for item in items]}
+
+    def update_account_session(self, account_id, sso):
+        new_sso = str(sso or "").strip()
+        if not new_sso:
+            raise ValueError("New SSO must not be empty")
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT email, sso FROM accounts WHERE id = ?", (int(account_id),)
+            ).fetchone()
+            if row is None:
+                raise LookupError("Account not found")
+            old_sso = row["sso"]
+            if old_sso != new_sso:
+                connection.execute(
+                    """INSERT OR IGNORE INTO account_tombstones (identity_hash, deleted_at)
+                       VALUES (?, ?)""",
+                    (_account_identity_hash(row["email"], old_sso), utc_now()),
+                )
+            connection.execute(
+                """UPDATE accounts
+                   SET sso = ?, authorization_status = 'authorized',
+                       last_authenticated_at = ?, updated_at = ?
+                   WHERE id = ?""",
+                (new_sso, utc_now(), utc_now(), int(account_id)),
+            )
+            return {"email": row["email"], "old_sso": old_sso, "sso": new_sso}
 
     def account_stats(self):
         with self.connection() as connection:
